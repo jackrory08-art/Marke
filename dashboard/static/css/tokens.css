@@ -1,0 +1,64 @@
+/* Design tokens. Warm paper ground, one burnt-orange accent, muted outlined
+   status colours. System fonts only (the CSP allows no external hosts). */
+:root {
+  --bg: #F4F1EA;
+  --surface: #FBF9F4;
+  --ink: #1D1A14;
+  --muted: #655F50;
+  --rule: #D3CCBA;
+  --accent: #A74D17;
+  --accent-ink: #FBF9F4;
+  --focus: #A74D17;
+
+  --ok: #2F6B34;
+  --caveat: #7A5C0A;
+  --bad: #9A3328;
+  --pending: #3F5878;
+  --neutral: #655F50;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --gutter: 16px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16140F;
+    --surface: #1E1B15;
+    --ink: #ECE7DA;
+    --muted: #A59E8B;
+    --rule: #3A362B;
+    --accent: #E2803F;
+    --accent-ink: #16140F;
+    --focus: #E2803F;
+    --ok: #8DBB7F;
+    --caveat: #D1AE55;
+    --bad: #E08A80;
+    --pending: #9DB3CF;
+    --neutral: #A59E8B;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16140F;
+  --surface: #1E1B15;
+  --ink: #ECE7DA;
+  --muted: #A59E8B;
+  --rule: #3A362B;
+  --accent: #E2803F;
+  --accent-ink: #16140F;
+  --focus: #E2803F;
+  --ok: #8DBB7F;
+  --caveat: #D1AE55;
+  --bad: #E08A80;
+  --pending: #9DB3CF;
+  --neutral: #A59E8B;
+  color-scheme: dark;
+}

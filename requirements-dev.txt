@@ -1,0 +1,10 @@
+# Development and testing (the Docker image does not need these)
+-r requirements.txt
+
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+mypy>=1.7.0
+
+# Optional: UI smoke tests / screenshots (use the preinstalled Chromium)
+# playwright>=1.40

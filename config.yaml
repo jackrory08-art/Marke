@@ -10,13 +10,10 @@ api:
   # Kalshi API endpoint (public, no auth needed for market data)
   kalshi_api_url: "https://api.elections.kalshi.com/trade-api/v2"
   
-  # Authentication (replace with your credentials)
-  api_key: "YOUR_API_KEY_HERE"
-  api_secret: "YOUR_API_SECRET_HERE"
-  passphrase: "YOUR_PASSPHRASE_HERE"
-  
-  # Wallet configuration
-  private_key: "YOUR_PRIVATE_KEY_HERE"
+  # Credentials are read from the environment / .env (see .env.example):
+  #   POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_PASSPHRASE,
+  #   POLYMARKET_PRIVATE_KEY
+  # Do not put them in this file. Nothing in this build places live orders.
   
   # Request settings
   timeout_seconds: 30
@@ -72,7 +69,7 @@ risk:
   auto_unwind_on_breach: false
 
 mode:
-  # Trading mode: "live" or "dry_run"
+  # Trading mode. Only "dry_run" is supported: live trading is disabled in this build.
   trading_mode: "dry_run"
   
   # Data mode: "real" or "simulation"
@@ -84,6 +81,8 @@ mode:
   cross_platform_enabled: true    # Enable cross-platform arbitrage detection
   kalshi_enabled: true            # Enable Kalshi market monitoring
   min_match_similarity: 0.6       # Minimum similarity score for market matching (0-1)
+  scan_interval_s: 10             # How often matched pairs are re-priced
+  scan_max_pairs_per_cycle: 25    # Caps order-book requests per scan
   
   # Dry run settings
   dry_run_initial_balance: 10000
@@ -116,3 +115,49 @@ monitoring:
   track_latency: true
   track_fill_rates: true
 
+
+server:
+  # Bind to loopback by default. Put an HTTPS reverse proxy in front for remote use
+  # (see docs/deploy.md) and keep cookie_secure: true.
+  host: "127.0.0.1"
+  port: 8000
+  cookie_secure: true
+  session_idle_minutes: 120
+  session_absolute_hours: 12
+  allowed_origins: []              # extra Origins allowed for state-changing requests
+  allowed_hosts: ["127.0.0.1", "localhost"]
+  hsts: false                      # enable when served over HTTPS
+
+database:
+  # DATABASE_URL in the environment overrides this.
+  url: "sqlite:///data/marke.db"
+  auto_migrate: true               # run `alembic upgrade head` at startup
+
+ai:
+  # LLM gate: a cross-platform pair is only actionable after the model confirms both
+  # markets resolve on the same terms. Set GEMINI_API_KEY in the environment.
+  enabled: true
+  provider: "gemini"               # gemini | anthropic | mock (mock is for demos/tests)
+  model: "gemini-3.1-flash-lite"
+  # temperature: 1.0               # unset = provider default (recommended for Gemini 3.x)
+  thinking_level: "low"
+  min_confidence: 0.80             # "identical" verdicts
+  min_confidence_caveats: 0.90     # "equivalent_with_caveats" verdicts
+  max_concurrency: 2
+  requests_per_minute: 10
+  daily_call_budget: 400           # stays under the free-tier daily quota
+  daily_cost_budget_usd: 0         # 0 = no cost cap
+  analysis_enabled: true
+  analysis_min_interval_s: 900
+  verifier_reserve_pct: 40         # share of the daily budget kept for verification
+
+predictit:
+  # Read-only third source. Off by default: confirm the live JSON shape first.
+  # PredictIt data is licensed for non-commercial use only.
+  enabled: false
+  poll_interval_s: 60
+  min_net_edge: 0.05
+  max_contract_usd: 850
+  profit_fee_pct: 0.10
+  withdrawal_fee_pct: 0.05
+  apply_withdrawal_fee: false

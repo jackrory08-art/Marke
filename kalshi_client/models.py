@@ -39,6 +39,12 @@ class KalshiMarket:
     # Category
     category: str = ""
     
+    # Resolution rules and labels (used to compare markets across platforms)
+    rules_primary: str = ""
+    rules_secondary: str = ""
+    yes_sub_title: str = ""
+    no_sub_title: str = ""
+    
     @property
     def is_active(self) -> bool:
         """Check if market is actively trading."""

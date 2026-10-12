@@ -1,0 +1,68 @@
+{
+  "markets": [
+    {
+      "id": 7456,
+      "name": "Which party will win the 2028 US presidential election?",
+      "shortName": "2028 winning party",
+      "image": "https://az620379.vo.msecnd.net/images/Contracts/small_a.png",
+      "url": "https://www.predictit.org/markets/detail/7456/Which-party-will-win-the-2028-US-presidential-election",
+      "contracts": [
+        {
+          "id": 28001, "dateEnd": "2028-11-07T00:00:00", "image": "x.png",
+          "name": "Democratic", "shortName": "Democratic", "status": "Open",
+          "lastTradePrice": 0.47, "bestBuyYesCost": 0.48, "bestBuyNoCost": 0.54,
+          "bestSellYesCost": 0.46, "bestSellNoCost": 0.52, "lastClosePrice": 0.47, "displayOrder": 0
+        },
+        {
+          "id": 28002, "dateEnd": "2028-11-07T00:00:00", "image": "x.png",
+          "name": "Republican", "shortName": "Republican", "status": "Open",
+          "lastTradePrice": 0.5, "bestBuyYesCost": 0.52, "bestBuyNoCost": 0.5,
+          "bestSellYesCost": 0.5, "bestSellNoCost": 0.48, "lastClosePrice": 0.5, "displayOrder": 1
+        },
+        {
+          "id": 28003, "dateEnd": "NA", "image": "x.png",
+          "name": "Other", "shortName": "Other", "status": "Open",
+          "lastTradePrice": 0.03, "bestBuyYesCost": 0.04, "bestBuyNoCost": null,
+          "bestSellYesCost": null, "bestSellNoCost": 0.96, "lastClosePrice": 0.03, "displayOrder": 2
+        }
+      ],
+      "timeStamp": "2026-10-12T14:31:07.2530000",
+      "status": "Open"
+    },
+    {
+      "id": 7822,
+      "name": "Will the US unemployment rate be above 4.5% in January 2027?",
+      "shortName": "Jan 2027 unemployment above 4.5%",
+      "image": "https://az620379.vo.msecnd.net/images/Markets/b.png",
+      "url": "https://www.predictit.org/markets/detail/7822/Will-the-US-unemployment-rate-be-above-45-in-January-2027",
+      "contracts": [
+        {
+          "id": 30341, "dateEnd": "2027-02-06T00:00:00", "image": "y.png",
+          "name": "Will the US unemployment rate be above 4.5% in January 2027?",
+          "shortName": "Above 4.5%", "status": "Open",
+          "lastTradePrice": 0.28, "bestBuyYesCost": 0.29, "bestBuyNoCost": 0.73,
+          "bestSellYesCost": 0.27, "bestSellNoCost": 0.71, "lastClosePrice": 0.28, "displayOrder": 0
+        }
+      ],
+      "timeStamp": "2026-10-12T14:30:55.1100000",
+      "status": "Open"
+    },
+    {
+      "id": 7001,
+      "name": "Will the 2024 midterm bill pass?",
+      "shortName": "Old market",
+      "image": "z.png",
+      "url": "https://www.predictit.org/markets/detail/7001/Old",
+      "contracts": [
+        {
+          "id": 90001, "dateEnd": "2025-01-01T00:00:00", "image": "z.png",
+          "name": "Will the 2024 midterm bill pass?", "shortName": "Pass", "status": "Closed",
+          "lastTradePrice": 1.0, "bestBuyYesCost": null, "bestBuyNoCost": null,
+          "bestSellYesCost": null, "bestSellNoCost": null, "lastClosePrice": 1.0, "displayOrder": 0
+        }
+      ],
+      "timeStamp": "2025-01-02T10:00:00",
+      "status": "Closed"
+    }
+  ]
+}
