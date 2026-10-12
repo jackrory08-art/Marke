@@ -210,12 +210,18 @@ def load_config(config_path: str = "config.yaml") -> BotConfig:
 
 
 def _extend_allowed_hosts(server_data: dict) -> dict:
-    """``MARKE_ALLOWED_HOSTS`` (comma-separated) adds to the configured hosts.
+    """``MARKE_ALLOWED_HOSTS`` (comma-separated), and the hostname Render or Railway
+    announces, add to the configured hosts.
 
     It extends rather than replaces, so loopback stays allowed for the
     container health check. Used for platforms that assign the hostname at deploy time.
     """
     extra = [h.strip() for h in os.environ.get("MARKE_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    # Hostnames announced by the hosting platform itself (Render, Railway)
+    for var in ("RENDER_EXTERNAL_HOSTNAME", "RAILWAY_PUBLIC_DOMAIN"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            extra.append(value)
     if not extra:
         return server_data
     base = list(server_data.get("allowed_hosts") or ServerConfig().allowed_hosts)

@@ -70,3 +70,11 @@ def test_allowed_hosts_env_extends_and_keeps_loopback(tmp_path, monkeypatch):
 def test_allowed_hosts_unchanged_without_env(tmp_path, monkeypatch):
     monkeypatch.delenv("MARKE_ALLOWED_HOSTS", raising=False)
     assert load_config(write(tmp_path, {})).server.allowed_hosts == ["127.0.0.1", "localhost"]
+
+
+def test_platform_announced_hostnames_are_allowed(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARKE_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setenv("RENDER_EXTERNAL_HOSTNAME", "marke-ab12.onrender.com")
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "marke.up.railway.app")
+    hosts = load_config(write(tmp_path, {})).server.allowed_hosts
+    assert hosts == ["127.0.0.1", "localhost", "marke-ab12.onrender.com", "marke.up.railway.app"]

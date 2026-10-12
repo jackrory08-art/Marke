@@ -85,7 +85,7 @@ def create_app(
     app.include_router(api_routes.router)
     app.include_router(ws.router)
 
-    @app.get("/healthz")
+    @app.api_route("/healthz", methods=["GET", "HEAD"])
     async def healthz():
         return {"ok": True}
 

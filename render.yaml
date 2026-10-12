@@ -1,0 +1,18 @@
+# Render Blueprint: free web service built from the Dockerfile.
+# The free plan has no persistent disk and sleeps after 15 minutes without traffic,
+# so see docs/render.md (keep-alive ping, and keep the bootstrap variables set).
+services:
+  - type: web
+    name: marke
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////tmp/marke.db      # ephemeral on the free plan
+      - key: GEMINI_API_KEY
+        sync: false                         # you enter these in the Render dashboard
+      - key: MARKE_BOOTSTRAP_USER
+        sync: false
+      - key: MARKE_BOOTSTRAP_PASSWORD
+        sync: false

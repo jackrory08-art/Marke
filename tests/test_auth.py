@@ -241,3 +241,8 @@ def test_bootstrapped_user_can_log_in(client, db, monkeypatch):
     monkeypatch.setenv("MARKE_BOOTSTRAP_PASSWORD", "a-long-enough-secret")
     bootstrap_owner_from_env(db)
     assert login(client, "a-long-enough-secret", "boss").status_code == 204
+
+
+def test_healthz_accepts_head_for_keepalive_pingers(client):
+    assert client.head("/healthz").status_code == 200
+    assert client.get("/healthz").json() == {"ok": True}
