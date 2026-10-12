@@ -133,6 +133,7 @@ async def test_attach_and_event(analyst_factory, db, config):
             break
     opp = state.cross_platform["cross_opportunities"][0]
     assert opp["analysis"]["summary"] and opp["quality_score"] == 72
+    assert any(t == "agent_state" and d["state"] == "analysing" for t, d in events)
     ready = [d for t, d in events if t == "analysis_ready"]
     assert len(ready) == 1 and ready[0]["quality_score"] == 72 and ready[0]["pair_id"] == pair.pair_id
     await scanner.scan_once()          # next scan keeps the analysis and doesn't re-announce it

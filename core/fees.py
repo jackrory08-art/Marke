@@ -97,6 +97,14 @@ class FeeModel:
 
 
 # --------------------------------------------------------------- book walking
+class UnknownSizeLevel(PriceLevel):
+    """A price level whose size the platform does not publish (e.g. PredictIt)."""
+    size_known = False
+
+    def __init__(self, price: float):
+        super().__init__(price=price, size=0.0)
+
+
 def level_size(level: PriceLevel) -> Optional[float]:
     """Size at a level, or None when the platform does not publish it."""
     if getattr(level, "size_known", True) is False:

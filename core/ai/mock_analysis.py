@@ -44,8 +44,8 @@ def analysis_for(prompt: str) -> dict:
         score -= 15
 
     summary = (
-        f"Buy {snap['token']} on {snap['buy_platform']} and sell it on {snap['sell_platform']}. "
-        f"The listed net edge is {snap['net_edge']:.1%} after fees. "
+        f"Buy {snap['token']} on {snap['buy_platform'].title()} and sell it on {snap['sell_platform'].title()}. "
+        f"The listed net edge is about {snap['net_edge'] * 100:.1f} cents per share after fees. "
         + ("The main risk is that the two markets resolve on slightly different terms."
            if any(r["kind"] == "resolution_mismatch" for r in risks)
            else "Check depth before sizing.")

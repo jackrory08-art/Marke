@@ -193,6 +193,8 @@ class OpportunityAnalyst:
             return held[1] if held else None
 
         self._inflight.add(okey)
+        self.emit("agent_state", {"state": "analysing", "detail": "writing up an opportunity",
+                                  "progress": {"done": 0, "total": 1}})
         try:
             run, cost = await self.runner.call(
                 system=SYSTEM_PROMPT, prompt=build_prompt(snapshot),
@@ -209,6 +211,8 @@ class OpportunityAnalyst:
             return held[1] if held else None
         finally:
             self._inflight.discard(okey)
+            self.emit("agent_state", {"state": "idle", "detail": "",
+                                      "progress": {"done": 1, "total": 1}})
 
         row = await asyncio.to_thread(self._store, key, okey, pair.pair_id, run, cost)
         result = self._to_dict(row, cached=False)

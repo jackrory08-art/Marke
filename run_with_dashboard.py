@@ -113,8 +113,11 @@ class TradingBotWithDashboard:
         )
         await self.client.connect()
         
+        # Simulation: a seeded demo of Kalshi/PredictIt pairs, no network needed
+        if self.config.use_simulation and self.config.mode.cross_platform_enabled:
+            self._start_simulated_cross_platform()
         # Initialize Kalshi client (if cross-platform enabled)
-        if self.config.mode.cross_platform_enabled and self.config.mode.kalshi_enabled:
+        elif self.config.mode.cross_platform_enabled and self.config.mode.kalshi_enabled:
             logger.info("Initializing Kalshi client for cross-platform arbitrage...")
             self.kalshi_client = KalshiClient(
                 timeout=self.config.api.timeout_seconds,
@@ -127,6 +130,8 @@ class TradingBotWithDashboard:
                 min_edge=self.config.trading.min_edge,
                 min_match_similarity=self.config.mode.min_match_similarity,
                 min_edge_provider=lambda: self.config.trading.min_edge,
+                predictit_min_net_edge=self.config.predictit.min_net_edge,
+                predictit_max_contract_usd=self.config.predictit.max_contract_usd,
             )
             self.market_matcher = self.cross_platform_engine.matcher
             self._setup_cross_platform_services()
@@ -347,7 +352,33 @@ class TradingBotWithDashboard:
             self._background_tasks.append(
                 asyncio.create_task(self._run_matching_background(polymarket_markets)))
     
-    def _setup_cross_platform_services(self) -> None:
+    def _start_simulated_cross_platform(self) -> None:
+        """Seed the pair store with synthetic pairs and serve synthetic books."""
+        from core.simulation_pairs import DemoMarkets
+        logger.info("Simulation mode: using the seeded demo pairs (no Kalshi/PredictIt calls)")
+        demo = DemoMarkets()
+        self.config.predictit.enabled = True  # the demo includes PredictIt pairs (in memory only)
+        self.cross_platform_engine = CrossPlatformArbEngine(
+            min_edge=self.config.trading.min_edge,
+            min_match_similarity=self.config.mode.min_match_similarity,
+            min_edge_provider=lambda: self.config.trading.min_edge,
+            predictit_min_net_edge=self.config.predictit.min_net_edge,
+        )
+        self.market_matcher = self.cross_platform_engine.matcher
+        self._setup_cross_platform_services(fetchers={
+            "polymarket": demo.fetcher("polymarket"),
+            "kalshi": demo.fetcher("kalshi"),
+            "predictit": demo.fetcher("predictit"),
+        })
+        dashboard_state.cross_platform.update({
+            "enabled": True, "matching_status": "complete", "matching_progress": 100,
+            "kalshi_markets": 6, "polymarket_markets": 8, "simulated": True})
+        pairs = demo.pairs()
+        self.pair_store.add_many(pairs)
+        dashboard_state.cross_platform["matched_pairs"] = len(pairs)
+        self.ai.queue.enqueue_pending()
+    
+    def _setup_cross_platform_services(self, fetchers: dict = None) -> None:
         """Pair store, AI verifier queue and the scan loop."""
         from core.ai.service import build_ai_services
         
@@ -357,7 +388,7 @@ class TradingBotWithDashboard:
         
         self.scanner = CrossPlatformScanner(
             self.cross_platform_engine, self.pair_store,
-            fetchers={
+            fetchers=fetchers or {
                 "polymarket": self._fetch_polymarket_book,
                 "kalshi": self._fetch_kalshi_book,
             },

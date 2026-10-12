@@ -1,4 +1,4 @@
-:root { --bg:#F4F1EA; --ink:#1d1a14; --muted:#5e584a; --rule:#cfc8b6; --accent:#B4541A; --field:#fffdf8; }
+:root { --bg:#F4F1EA; --ink:#1d1a14; --muted:#5e584a; --rule:#cfc8b6; --accent:#A74D17; --field:#fffdf8; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#16140F; --ink:#ece7da; --muted:#a49d8b; --rule:#3a362b; --accent:#E2803F; --field:#1e1b14; }
 }
