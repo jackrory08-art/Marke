@@ -207,3 +207,37 @@ def test_password_stored_hashed(db, owner):
     with db.session() as s:
         u = repo.get_user_by_username(s, OWNER)
         assert u.password_hash.startswith("$argon2id$")
+
+
+def test_bootstrap_owner_only_when_empty_and_configured(db, monkeypatch, caplog):
+    from app import repo
+    from app.create_user import bootstrap_owner_from_env
+    monkeypatch.delenv("MARKE_BOOTSTRAP_USER", raising=False)
+    monkeypatch.delenv("MARKE_BOOTSTRAP_PASSWORD", raising=False)
+    assert bootstrap_owner_from_env(db) is False                       # nothing configured
+
+    monkeypatch.setenv("MARKE_BOOTSTRAP_USER", "Boss")
+    monkeypatch.setenv("MARKE_BOOTSTRAP_PASSWORD", "short")
+    assert bootstrap_owner_from_env(db) is False                       # weak password refused
+    with db.session() as s:
+        assert repo.count_users(s) == 0
+
+    monkeypatch.setenv("MARKE_BOOTSTRAP_PASSWORD", "a-long-enough-secret")
+    with caplog.at_level("WARNING"):
+        assert bootstrap_owner_from_env(db) is True
+    assert "a-long-enough-secret" not in caplog.text
+    with db.session() as s:
+        assert repo.get_user_by_username(s, "boss") is not None
+
+    monkeypatch.setenv("MARKE_BOOTSTRAP_USER", "intruder")             # users exist: never adds more
+    assert bootstrap_owner_from_env(db) is False
+    with db.session() as s:
+        assert repo.count_users(s) == 1
+
+
+def test_bootstrapped_user_can_log_in(client, db, monkeypatch):
+    from app.create_user import bootstrap_owner_from_env
+    monkeypatch.setenv("MARKE_BOOTSTRAP_USER", "boss")
+    monkeypatch.setenv("MARKE_BOOTSTRAP_PASSWORD", "a-long-enough-secret")
+    bootstrap_owner_from_env(db)
+    assert login(client, "a-long-enough-secret", "boss").status_code == 204

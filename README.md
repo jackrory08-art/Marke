@@ -63,7 +63,8 @@ docker compose up -d
 
 The port is published on `127.0.0.1:8000` only, the database lives in the `marke-data` volume, and
 the container runs as a non-root user with a health check on `/healthz`. For access from other
-machines, put an HTTPS reverse proxy in front: see [docs/deploy.md](docs/deploy.md).
+machines, put an HTTPS reverse proxy in front: see [docs/deploy.md](docs/deploy.md). To host it
+without running anything on your own computer, see [docs/railway.md](docs/railway.md).
 
 ## Security model
 

@@ -84,6 +84,9 @@ Copy `.env.example` to `.env`:
 | `GEMINI_API_KEY` | AI verifier and analyst. Without it pairs stay unverified. |
 | `DATABASE_URL` | Defaults to `sqlite:///data/marke.db`. Postgres: `postgresql+psycopg://user:pass@host/db` (install `psycopg[binary]`; the test suite runs on SQLite only). |
 | `MARKE_SESSION_SECRET` | Optional. If set, session tokens are stored as HMAC-SHA256(secret, token). Changing it signs everyone out. |
+| `MARKE_ALLOWED_HOSTS` | Comma-separated hostnames added to `server.allowed_hosts` (loopback stays allowed). |
+| `MARKE_BOOTSTRAP_USER`, `MARKE_BOOTSTRAP_PASSWORD` | For hosts with no shell: create the owner on first start when no user exists. Remove the password afterwards. |
+| `PORT` | Set by hosting platforms; the app listens on it when `--port` is not given. |
 | `POLYMARKET_*` | Not needed for read-only dry-run use. |
 
 ## 5. Database and backups

@@ -18,11 +18,11 @@ COPY --chown=marke:marke . .
 
 USER marke
 ENV DATABASE_URL=sqlite:////data/marke.db
-VOLUME ["/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '8000'), timeout=3)"
 
-# Binding 0.0.0.0 is fine here: compose publishes the port on loopback only.
-CMD ["python", "run_with_dashboard.py", "--host", "0.0.0.0", "--port", "8000"]
+# Binding 0.0.0.0 is fine in a container. Port: $PORT if the platform sets it, else 8000.
+# Compose publishes the port on loopback only.
+CMD ["python", "run_with_dashboard.py", "--host", "0.0.0.0"]

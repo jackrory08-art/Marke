@@ -187,6 +187,7 @@ def load_config(config_path: str = "config.yaml") -> BotConfig:
     # Handle environment variable overrides
     api_data = _apply_env_overrides(api_data, _SECRET_ENV_MAP)
     database_data = _apply_env_overrides(database_data, {"url": "DATABASE_URL"})
+    server_data = _extend_allowed_hosts(server_data)
     
     # Build config objects
     config = BotConfig(
@@ -206,6 +207,20 @@ def load_config(config_path: str = "config.yaml") -> BotConfig:
     validate_config(config)
     
     return config
+
+
+def _extend_allowed_hosts(server_data: dict) -> dict:
+    """``MARKE_ALLOWED_HOSTS`` (comma-separated) adds to the configured hosts.
+
+    It extends rather than replaces, so loopback stays allowed for the
+    container health check. Used for platforms that assign the hostname at deploy time.
+    """
+    extra = [h.strip() for h in os.environ.get("MARKE_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if not extra:
+        return server_data
+    base = list(server_data.get("allowed_hosts") or ServerConfig().allowed_hosts)
+    merged = base + [h for h in extra if h not in base]
+    return {**server_data, "allowed_hosts": merged}
 
 
 def _warn_secrets_in_yaml(api_data: dict, config_path: str) -> None:

@@ -55,3 +55,18 @@ def test_old_config_without_new_sections_loads(tmp_path):
 def test_shipped_config_has_no_secrets():
     text = open("config.yaml").read()
     assert "YOUR_API_KEY_HERE" not in text and "YOUR_PRIVATE_KEY_HERE" not in text
+
+
+def test_allowed_hosts_env_extends_and_keeps_loopback(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARKE_ALLOWED_HOSTS", "marke.up.railway.app, healthcheck.railway.app ,localhost")
+    cfg = load_config(write(tmp_path, {}))
+    assert cfg.server.allowed_hosts == [
+        "127.0.0.1", "localhost", "marke.up.railway.app", "healthcheck.railway.app"]
+    cfg = load_config(write(tmp_path, {"server": {"allowed_hosts": ["a.example"]}}))
+    assert cfg.server.allowed_hosts == [
+        "a.example", "marke.up.railway.app", "healthcheck.railway.app", "localhost"]
+
+
+def test_allowed_hosts_unchanged_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARKE_ALLOWED_HOSTS", raising=False)
+    assert load_config(write(tmp_path, {})).server.allowed_hosts == ["127.0.0.1", "localhost"]

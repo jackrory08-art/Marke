@@ -19,6 +19,7 @@ Advisory tool: nothing here places orders. Live trading is disabled in this buil
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
@@ -40,6 +41,7 @@ from core.pair_store import PairStore
 from core.market_ref import from_kalshi, from_polymarket
 from predictit_client.api import build_predictit_client
 from app import repo
+from app.create_user import bootstrap_owner_from_env
 from app.db import Database, init_database
 from app.settings import apply_overrides
 from utils.config_loader import load_config, validate_config, BotConfig
@@ -103,6 +105,7 @@ class TradingBotWithDashboard:
         # Database (users, sessions, verdicts, history) and persisted UI settings
         self.db = init_database(self.config.database.url, self.config.database.auto_migrate)
         apply_overrides(self.config, self.db)
+        bootstrap_owner_from_env(self.db)
         
         # Initialize Polymarket API client
         self.client = PolymarketClient(
@@ -665,7 +668,8 @@ async def main_async(args: argparse.Namespace) -> None:
         sys.exit(1)
     
     host = args.host or config.server.host
-    port = args.port or config.server.port
+    # Hosting platforms (Railway, Render, Fly) tell the app which port to use via $PORT
+    port = args.port or int(os.environ.get("PORT") or 0) or config.server.port
     
     # Create and run bot with dashboard
     bot = TradingBotWithDashboard(config, host=host, port=port)

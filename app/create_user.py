@@ -37,6 +37,32 @@ def create_user(db: Database, username: str, password: str, add: bool = False) -
         return user.id
 
 
+def bootstrap_owner_from_env(db: Database) -> bool:
+    """Create the first user from ``MARKE_BOOTSTRAP_USER`` / ``MARKE_BOOTSTRAP_PASSWORD``.
+
+    For hosts with no shell. It does nothing unless both variables are set and
+    the database has no users, so it can never add or change an account later.
+    Remove the password variable once you have signed in.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    username = os.environ.get("MARKE_BOOTSTRAP_USER", "").strip()
+    password = os.environ.get("MARKE_BOOTSTRAP_PASSWORD", "")
+    if not username or not password:
+        return False
+    with db.session() as s:
+        if repo.count_users(s) > 0:
+            return False
+    try:
+        create_user(db, username, password)
+    except CreateUserError as e:
+        log.error("MARKE_BOOTSTRAP_* ignored: %s", e)
+        return False
+    log.warning("Created the owner account '%s' from MARKE_BOOTSTRAP_*. Remove "
+                "MARKE_BOOTSTRAP_PASSWORD from the environment now.", username.lower())
+    return True
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Create a dashboard user")
     parser.add_argument("--username", required=True)
