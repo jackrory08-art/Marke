@@ -369,6 +369,7 @@ class TradingBotWithDashboard:
             self.config.ai, self.db, self.pair_store, dashboard_state.emit,
             on_verified=self.scanner.on_pair_verified,
         )
+        self.scanner.analyst = self.ai.analyst
         dashboard_state.ai = self.ai
         dashboard_state.scanner = self.scanner
         dashboard_state.setting_hooks["ai.enabled"] = (

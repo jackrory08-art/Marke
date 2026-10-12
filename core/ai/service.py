@@ -6,6 +6,7 @@ from typing import Callable, Optional
 from app.clock import utcnow
 from core.ai.factory import build_provider
 from core.ai.provider import LLMProvider
+from core.ai.analyst import OpportunityAnalyst
 from core.ai.queue import VerificationQueue
 from core.ai.runner import AIRunner
 from core.ai.verifier import MatchVerifier
@@ -58,4 +59,5 @@ def build_ai_services(
     verifier = MatchVerifier(runner, db, config, clock=clock)
     queue = VerificationQueue(verifier, store, emit, workers=config.max_concurrency,
                               on_verified=on_verified)
-    return AIServices(config, provider, runner, verifier, queue)
+    analyst = OpportunityAnalyst(runner, db, config, clock=clock, emit=emit)
+    return AIServices(config, provider, runner, verifier, queue, analyst)
