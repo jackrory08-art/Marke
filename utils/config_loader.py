@@ -89,6 +89,8 @@ class ModeConfig:
     dry_run_initial_balance: float = 10000.0
     simulate_fills: bool = True
     fill_probability: float = 0.8
+    scan_interval_s: float = 10.0          # cross-platform scan cadence
+    scan_max_pairs_per_cycle: int = 25     # caps order-book fetches per scan
 
 
 @dataclass

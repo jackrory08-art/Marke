@@ -64,6 +64,10 @@ class DashboardState:
         self.agent_state: dict = {
             "state": "idle", "detail": "", "progress": {"done": 0, "total": 0}}
         self.log_buffer = None
+        self.ai = None  # AIServices, set by the runner
+        self.scanner = None  # CrossPlatformScanner, set by the runner
+        self.setting_hooks: dict = {}  # key -> async callable(value)
+        self.ai_budget: dict = {}
     
     def to_dict(self) -> dict:
         """Convert state to dictionary for JSON serialization."""
@@ -80,6 +84,9 @@ class DashboardState:
             "timing": self.timing,  # Opportunity timing stats
             "operational": self.operational,  # Operational stats
             "cross_platform": self.cross_platform,  # Cross-platform arbitrage stats
+            "ai": {**(self.ai.status() if self.ai else self.ai_status), "budget": self.ai_budget},
+            "agent_state": self.agent_state,
+            "pairs": self.pair_store.counts() if self.pair_store else {},
             "is_running": self.is_running,
             "mode": self.mode,
             "last_update": self.last_update.isoformat(),
@@ -125,6 +132,10 @@ class DashboardState:
     
     def emit(self, event_type: str, data: Any = None) -> None:
         """Fire-and-forget broadcast from sync code running inside the event loop."""
+        if event_type == "agent_state" and isinstance(data, dict):
+            self.agent_state = data
+        elif event_type == "ai_budget" and isinstance(data, dict):
+            self.ai_budget = data
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

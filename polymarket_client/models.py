@@ -188,6 +188,11 @@ class Market:
     # Metadata
     category: str = ""
     tags: list[str] = field(default_factory=list)
+    
+    # Resolution details (used to compare markets across platforms)
+    resolution_source: str = ""
+    outcomes: list[str] = field(default_factory=list)
+    slug: str = ""
 
 
 @dataclass

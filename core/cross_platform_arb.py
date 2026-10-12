@@ -17,20 +17,45 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Optional
 
+from core.fees import FeeModel, PredictItFees, top_of_book_size, walk_book
+from core.market_ref import ComparableMarket, from_kalshi, from_polymarket
 from polymarket_client.models import Market, OrderBook, Opportunity, OpportunityType
 
 logger = logging.getLogger(__name__)
 
 
+PLATFORM_ORDER = ("polymarket", "kalshi", "predictit")
+
+
+def _platform_rank(platform: str) -> int:
+    return PLATFORM_ORDER.index(platform) if platform in PLATFORM_ORDER else len(PLATFORM_ORDER)
+
+
 @dataclass
 class MarketPair:
-    """A matched pair of markets on Polymarket and Kalshi."""
-    polymarket_id: str
-    kalshi_ticker: str
-    polymarket_question: str
-    kalshi_title: str
+    """A matched pair of markets on two platforms.
+    
+    Platforms are stored in canonical order (polymarket, kalshi, predictit) so a
+    pair has one identity whichever side was matched first.
+    """
+    platform_a: str
+    market_a_id: str
+    platform_b: str
+    market_b_id: str
+    title_a: str
+    title_b: str
     similarity_score: float
     category: str = ""
+    
+    # Normalised market text for the LLM gate and the UI
+    ref_a: Optional[ComparableMarket] = None
+    ref_b: Optional[ComparableMarket] = None
+    
+    # pending | verified | rejected | unverified (dismissal is a separate flag)
+    verification_status: str = "pending"
+    verification: dict = field(default_factory=dict)
+    dismissed: bool = False
+    live_edge: bool = False  # last scan found a raw edge (raises verification priority)
     
     # Timestamps
     matched_at: datetime = field(default_factory=datetime.utcnow)
@@ -38,17 +63,63 @@ class MarketPair:
     @property
     def pair_id(self) -> str:
         """Unique identifier for this pair."""
-        return f"poly:{self.polymarket_id}|kalshi:{self.kalshi_ticker}"
+        return f"{self.platform_a}:{self.market_a_id}|{self.platform_b}:{self.market_b_id}"
+    
+    @property
+    def platforms(self) -> tuple[str, str]:
+        return (self.platform_a, self.platform_b)
+    
+    def _side(self, platform: str):
+        if self.platform_a == platform:
+            return self.market_a_id, self.title_a
+        if self.platform_b == platform:
+            return self.market_b_id, self.title_b
+        return "", ""
+    
+    # Backwards-compatible names for Polymarket/Kalshi pairs
+    @property
+    def polymarket_id(self) -> str:
+        return self._side("polymarket")[0]
+    
+    @property
+    def kalshi_ticker(self) -> str:
+        return self._side("kalshi")[0]
+    
+    @property
+    def polymarket_question(self) -> str:
+        return self._side("polymarket")[1]
+    
+    @property
+    def kalshi_title(self) -> str:
+        return self._side("kalshi")[1]
+    
+    @property
+    def status(self) -> str:
+        """Effective status shown to users."""
+        return "dismissed" if self.dismissed else self.verification_status
+    
+    @classmethod
+    def from_refs(
+        cls, ref_1: ComparableMarket, ref_2: ComparableMarket,
+        similarity: float, category: str = "",
+    ) -> "MarketPair":
+        a, b = sorted((ref_1, ref_2), key=lambda r: _platform_rank(r.platform))
+        return cls(
+            platform_a=a.platform, market_a_id=a.market_id,
+            platform_b=b.platform, market_b_id=b.market_id,
+            title_a=a.title, title_b=b.title,
+            similarity_score=similarity, category=category, ref_a=a, ref_b=b,
+        )
 
 
 @dataclass
 class CrossPlatformOpportunity:
-    """Arbitrage opportunity between Polymarket and Kalshi."""
+    """Arbitrage opportunity between two platforms."""
     opportunity_id: str
     market_pair: MarketPair
     
     # Direction: which platform to buy/sell on
-    buy_platform: str  # "polymarket" or "kalshi"
+    buy_platform: str
     sell_platform: str
     token: str  # "YES" or "NO"
     
@@ -63,20 +134,76 @@ class CrossPlatformOpportunity:
     
     # Sizing
     suggested_size: float = 0.0
-    max_size: float = 0.0  # Limited by liquidity on both sides
+    max_size: Optional[float] = 0.0  # Limited by liquidity on both sides (None = unknown)
     
-    # Liquidity available
-    buy_liquidity: float = 0.0
-    sell_liquidity: float = 0.0
+    # Liquidity available (None = the platform does not publish size)
+    buy_liquidity: Optional[float] = 0.0
+    sell_liquidity: Optional[float] = 0.0
+    
+    # Detail
+    fees: dict = field(default_factory=dict)
+    depth: Optional[float] = None               # min top-of-book size, None if unknown
+    slippage_estimate: Optional[float] = None   # per share, walking the book for suggested_size
+    time_to_expiry: Optional[float] = None      # seconds until the earlier end date
+    
+    # Gate
+    verification_status: str = "pending"
+    actionable: bool = False
+    manual_trade: bool = False                  # a PredictIt leg must be placed by hand
+    quality_score: Optional[int] = None
+    analysis: Optional[dict] = None
     
     # Metadata
     detected_at: datetime = field(default_factory=datetime.utcnow)
+    
+    @property
+    def pair_id(self) -> str:
+        return self.market_pair.pair_id
+    
+    @property
+    def opportunity_key(self) -> str:
+        return f"{self.pair_id}|{self.buy_platform}>{self.sell_platform}|{self.token}"
+    
+    def to_dict(self) -> dict:
+        pair = self.market_pair
+        return {
+            "id": self.opportunity_key,
+            "kind": "cross_platform",
+            "pair_id": pair.pair_id,
+            "platforms": list(pair.platforms),
+            "title_a": pair.title_a,
+            "title_b": pair.title_b,
+            "market_a_id": pair.market_a_id,
+            "market_b_id": pair.market_b_id,
+            "buy_platform": self.buy_platform,
+            "sell_platform": self.sell_platform,
+            "token": self.token,
+            "buy_price": self.buy_price,
+            "sell_price": self.sell_price,
+            "gross_edge": self.gross_edge,
+            "net_edge": self.net_edge,
+            "edge_pct": self.edge_pct,
+            "suggested_size": self.suggested_size,
+            "max_size": self.max_size,
+            "fees": self.fees,
+            "depth": self.depth,
+            "slippage_estimate": self.slippage_estimate,
+            "time_to_expiry": self.time_to_expiry,
+            "verification_status": self.verification_status,
+            "actionable": self.actionable,
+            "manual_trade": self.manual_trade,
+            "quality_score": self.quality_score,
+            "analysis": self.analysis,
+            "verdict": pair.verification or None,
+            "refs": [r.to_public() for r in (pair.ref_a, pair.ref_b) if r is not None],
+            "detected_at": self.detected_at.isoformat() + "Z",
+        }
     
     def __str__(self) -> str:
         return (
             f"CrossPlatformArb: Buy {self.token} on {self.buy_platform} @ ${self.buy_price:.3f}, "
             f"Sell on {self.sell_platform} @ ${self.sell_price:.3f} | "
-            f"Net Edge: {self.edge_pct:.2%}"
+            f"Net Edge: {self.edge_pct:.2%} [{self.verification_status}]"
         )
 
 
@@ -254,7 +381,7 @@ class MarketMatcher:
             match = re.search(pattern, text_lower)
             if match:
                 day = match.group(1).zfill(2)
-                year = match.group(2) or '2024'  # Default to current year
+                year = match.group(2) or str(datetime.utcnow().year)
                 return f"{year}-{month_num}-{day}"
         
         # Pattern: "12/8/24", "12-8-2024"
@@ -458,7 +585,7 @@ class MarketMatcher:
         on_progress: callable = None,  # Callback for progress updates
     ) -> list[MarketPair]:
         """
-        Find matching markets between platforms using category-based matching.
+        Find matching Polymarket/Kalshi markets using category-based matching.
         
         Args:
             polymarket_markets: List of Polymarket markets
@@ -466,48 +593,52 @@ class MarketMatcher:
             on_progress: Optional callback(checked, total, matches_found) for live updates
             
         Returns:
-            List of matched market pairs
+            List of matched market pairs (each carries both markets' rules text)
+        """
+        refs_poly = [from_polymarket(m) for m in polymarket_markets if m.active]
+        refs_kalshi = [from_kalshi(m) for m in kalshi_markets if m.is_active]
+        return await self.match_refs(refs_poly, refs_kalshi, on_progress=on_progress)
+    
+    async def match_refs(
+        self,
+        refs_a: list[ComparableMarket],
+        refs_b: list[ComparableMarket],
+        on_progress: callable = None,
+    ) -> list[MarketPair]:
+        """Match two lists of markets from different platforms by title similarity.
+        
+        For each market in ``refs_a`` the best match in ``refs_b`` within the
+        same category is kept if it reaches ``min_similarity``. This only
+        *proposes* pairs; the LLM gate decides whether they are the same bet.
         """
         import asyncio
         
         matches = []
         
-        # Get all active markets
-        active_poly = [m for m in polymarket_markets if m.active]
-        active_kalshi = [m for m in kalshi_markets if m.is_active]
-        
         # Group by category for faster matching
         logger.info("Categorizing markets for faster matching...")
         
-        poly_by_cat: dict[str, list] = {}
-        for m in active_poly:
-            cat = self._categorize_market(m.question)
-            if cat not in poly_by_cat:
-                poly_by_cat[cat] = []
-            poly_by_cat[cat].append(m)
+        a_by_cat: dict[str, list] = {}
+        for m in refs_a:
+            a_by_cat.setdefault(self._categorize_market(m.title), []).append(m)
         
-        kalshi_by_cat: dict[str, list] = {}
-        for m in active_kalshi:
-            cat = self._categorize_market(m.title)
-            if cat not in kalshi_by_cat:
-                kalshi_by_cat[cat] = []
-            kalshi_by_cat[cat].append(m)
+        b_by_cat: dict[str, list] = {}
+        for m in refs_b:
+            b_by_cat.setdefault(self._categorize_market(m.title), []).append(m)
         
         # Log category breakdown
         logger.info("=== CATEGORY BREAKDOWN ===")
-        for cat in set(list(poly_by_cat.keys()) + list(kalshi_by_cat.keys())):
-            p_count = len(poly_by_cat.get(cat, []))
-            k_count = len(kalshi_by_cat.get(cat, []))
-            logger.info(f"  {cat}: Polymarket={p_count}, Kalshi={k_count}")
+        for cat in set(list(a_by_cat.keys()) + list(b_by_cat.keys())):
+            logger.info(f"  {cat}: A={len(a_by_cat.get(cat, []))}, B={len(b_by_cat.get(cat, []))}")
         
         # Calculate total comparisons (only within categories)
         total_comparisons = sum(
-            len(poly_by_cat.get(cat, [])) * len(kalshi_by_cat.get(cat, []))
-            for cat in set(list(poly_by_cat.keys()) + list(kalshi_by_cat.keys()))
+            len(a_by_cat.get(cat, [])) * len(b_by_cat.get(cat, []))
+            for cat in set(list(a_by_cat.keys()) + list(b_by_cat.keys()))
         )
         
         logger.info(f"Total comparisons (category-based): {total_comparisons:,}")
-        logger.info(f"(vs {len(active_poly) * len(active_kalshi):,} if matching all-to-all)")
+        logger.info(f"(vs {len(refs_a) * len(refs_b):,} if matching all-to-all)")
         
         checked = 0
         
@@ -515,27 +646,24 @@ class MarketMatcher:
         priority_categories = ['sports', 'politics', 'crypto', 'finance', 'entertainment', 'tech']
         
         for category in priority_categories:
-            poly_markets = poly_by_cat.get(category, [])
-            kalshi_markets_cat = kalshi_by_cat.get(category, [])
+            cat_a = a_by_cat.get(category, [])
+            cat_b = b_by_cat.get(category, [])
             
-            if not poly_markets or not kalshi_markets_cat:
+            if not cat_a or not cat_b:
                 continue
             
-            logger.info(f"Matching {category}: {len(poly_markets)} x {len(kalshi_markets_cat)}")
+            logger.info(f"Matching {category}: {len(cat_a)} x {len(cat_b)}")
             
-            for poly_market in poly_markets:
+            for ref_a in cat_a:
                 best_match = None
                 best_score = 0.0
                 
-                for kalshi_market in kalshi_markets_cat:
-                    score = self.calculate_similarity(
-                        poly_market.question,
-                        kalshi_market.title
-                    )
+                for ref_b in cat_b:
+                    score = self.calculate_similarity(ref_a.title, ref_b.title)
                     
                     if score > best_score:
                         best_score = score
-                        best_match = kalshi_market
+                        best_match = ref_b
                     
                     checked += 1
                 
@@ -550,24 +678,17 @@ class MarketMatcher:
                     if on_progress:
                         try:
                             on_progress(checked, total_comparisons, len(matches))
-                        except:
+                        except Exception:
                             pass
                 
-                # After checking all Kalshi markets for this Poly market
+                # After checking all candidates for this market
                 if best_match and best_score >= self.min_similarity:
-                    pair = MarketPair(
-                        polymarket_id=poly_market.market_id,
-                        kalshi_ticker=best_match.ticker,
-                        polymarket_question=poly_market.question,
-                        kalshi_title=best_match.title,
-                        similarity_score=best_score,
-                        category=category,
-                    )
+                    pair = MarketPair.from_refs(ref_a, best_match, best_score, category)
                     matches.append(pair)
                     self._matched_pairs[pair.pair_id] = pair
                     
                     logger.info(
-                        f"MATCHED [{category}]: '{poly_market.question[:35]}...' <-> '{best_match.title[:35]}...' "
+                        f"MATCHED [{category}]: '{ref_a.title[:35]}...' <-> '{best_match.title[:35]}...' "
                         f"(score: {best_score:.2f})"
                     )
         
@@ -581,11 +702,15 @@ class MarketMatcher:
 
 class CrossPlatformArbEngine:
     """
-    Detects arbitrage opportunities between Polymarket and Kalshi.
+    Detects arbitrage opportunities between matched markets on two platforms.
     
-    Monitors matched market pairs and alerts when prices diverge enough
-    to create profitable cross-platform arbitrage.
+    ``check_pair`` does the maths for any pair; ``check_arbitrage`` is the
+    original Polymarket/Kalshi entry point and delegates to it. Whether an
+    opportunity is *actionable* is decided by the pair's verification status
+    (the LLM gate), not here.
     """
+    
+    TOKENS = ("YES", "NO")
     
     def __init__(
         self,
@@ -593,6 +718,11 @@ class CrossPlatformArbEngine:
         polymarket_taker_fee: float = 0.015,  # 1.5%
         kalshi_taker_fee: float = 0.01,  # ~1% estimate
         gas_cost: float = 0.02,  # Gas cost per order
+        min_match_similarity: float = 0.5,
+        fee_model: Optional[FeeModel] = None,
+        predictit_min_net_edge: Optional[float] = None,
+        predictit_max_contract_usd: float = 850.0,
+        min_edge_provider: Optional[callable] = None,
     ):
         """
         Initialize cross-platform arb engine.
@@ -602,15 +732,40 @@ class CrossPlatformArbEngine:
             polymarket_taker_fee: Polymarket taker fee rate
             kalshi_taker_fee: Kalshi taker fee rate
             gas_cost: Estimated gas cost per order
+            min_match_similarity: Matcher threshold (from config.mode.min_match_similarity)
+            fee_model: Override the fee model (PredictIt fees live here)
+            predictit_min_net_edge: Higher edge floor for pairs that involve PredictIt
+            min_edge_provider: Callable returning the current min edge (runtime settings)
         """
-        self.min_edge = min_edge
+        self._min_edge = min_edge
+        self._min_edge_provider = min_edge_provider
         self.polymarket_taker_fee = polymarket_taker_fee
         self.kalshi_taker_fee = kalshi_taker_fee
         self.gas_cost = gas_cost
+        self.fees = fee_model or FeeModel(
+            polymarket_taker_fee=polymarket_taker_fee,
+            kalshi_taker_fee=kalshi_taker_fee,
+            gas_cost=gas_cost,
+        )
+        self.predictit_min_net_edge = predictit_min_net_edge
+        self.predictit_max_contract_usd = predictit_max_contract_usd
         
-        self.matcher = MarketMatcher()
+        self.matcher = MarketMatcher(min_similarity=min_match_similarity)
         self._opportunities: list[CrossPlatformOpportunity] = []
         self._opportunity_count = 0
+    
+    @property
+    def min_edge(self) -> float:
+        return self._min_edge_provider() if self._min_edge_provider else self._min_edge
+    
+    @min_edge.setter
+    def min_edge(self, value: float) -> None:
+        self._min_edge = value
+    
+    def _edge_floor(self, pair: MarketPair) -> float:
+        if "predictit" in pair.platforms and self.predictit_min_net_edge is not None:
+            return max(self.min_edge, self.predictit_min_net_edge)
+        return self.min_edge
     
     def check_arbitrage(
         self,
@@ -618,134 +773,73 @@ class CrossPlatformArbEngine:
         polymarket_ob: OrderBook,
         kalshi_ob: OrderBook,
     ) -> Optional[CrossPlatformOpportunity]:
+        """Original Polymarket/Kalshi entry point; delegates to :meth:`check_pair`."""
+        return self.check_pair(market_pair, polymarket_ob, kalshi_ob)
+    
+    def check_pair(
+        self,
+        pair: MarketPair,
+        book_a: OrderBook,
+        book_b: OrderBook,
+        record: bool = True,
+    ) -> Optional[CrossPlatformOpportunity]:
         """
-        Check for arbitrage opportunity between a matched market pair.
+        Check for an arbitrage opportunity between a matched pair.
         
         Args:
-            market_pair: The matched market pair
-            polymarket_ob: Polymarket order book
-            kalshi_ob: Kalshi order book (in unified format)
+            pair: The matched pair
+            book_a: Order book for ``pair.platform_a`` (unified format)
+            book_b: Order book for ``pair.platform_b``
+            record: Keep the opportunity in the engine's history
             
         Returns:
-            CrossPlatformOpportunity if found, None otherwise
+            The best CrossPlatformOpportunity if any direction clears the edge floor.
         """
-        # Get best prices from both platforms
-        poly_yes_ask = polymarket_ob.best_ask_yes
-        poly_yes_bid = polymarket_ob.best_bid_yes
-        poly_no_ask = polymarket_ob.best_ask_no
-        poly_no_bid = polymarket_ob.best_bid_no
+        books = {pair.platform_a: book_a, pair.platform_b: book_b}
+        a, b = pair.platform_a, pair.platform_b
         
-        kalshi_yes_ask = kalshi_ob.best_ask_yes
-        kalshi_yes_bid = kalshi_ob.best_bid_yes
-        kalshi_no_ask = kalshi_ob.best_ask_no
-        kalshi_no_bid = kalshi_ob.best_bid_no
-        
-        # Check for valid prices
-        if not all([poly_yes_ask, poly_yes_bid, kalshi_yes_ask, kalshi_yes_bid]):
+        # Need a two-sided YES market on both platforms
+        if not all([book_a.best_ask_yes, book_a.best_bid_yes,
+                    book_b.best_ask_yes, book_b.best_bid_yes]):
             return None
         
+        floor = self._edge_floor(pair)
         best_opp = None
         best_net_edge = 0.0
         
-        # Check all possible arbitrage directions:
-        
-        # 1. Buy YES on Polymarket, sell YES on Kalshi
-        if poly_yes_ask and kalshi_yes_bid:
-            gross = kalshi_yes_bid - poly_yes_ask
-            fees = (poly_yes_ask * self.polymarket_taker_fee + 
-                    kalshi_yes_bid * self.kalshi_taker_fee + 
-                    self.gas_cost * 2)
-            net = gross - fees
-            if net > best_net_edge and net >= self.min_edge:
-                best_net_edge = net
-                best_opp = self._create_opportunity(
-                    market_pair=market_pair,
-                    buy_platform="polymarket",
-                    sell_platform="kalshi",
-                    token="YES",
-                    buy_price=poly_yes_ask,
-                    sell_price=kalshi_yes_bid,
-                    gross_edge=gross,
-                    net_edge=net,
-                    buy_liquidity=polymarket_ob.yes.asks.best_size or 0,
-                    sell_liquidity=kalshi_ob.yes.bids.best_size or 0,
-                )
-        
-        # 2. Buy YES on Kalshi, sell YES on Polymarket
-        if kalshi_yes_ask and poly_yes_bid:
-            gross = poly_yes_bid - kalshi_yes_ask
-            fees = (kalshi_yes_ask * self.kalshi_taker_fee + 
-                    poly_yes_bid * self.polymarket_taker_fee + 
-                    self.gas_cost * 2)
-            net = gross - fees
-            if net > best_net_edge and net >= self.min_edge:
-                best_net_edge = net
-                best_opp = self._create_opportunity(
-                    market_pair=market_pair,
-                    buy_platform="kalshi",
-                    sell_platform="polymarket",
-                    token="YES",
-                    buy_price=kalshi_yes_ask,
-                    sell_price=poly_yes_bid,
-                    gross_edge=gross,
-                    net_edge=net,
-                    buy_liquidity=kalshi_ob.yes.asks.best_size or 0,
-                    sell_liquidity=polymarket_ob.yes.bids.best_size or 0,
-                )
-        
-        # 3. Buy NO on Polymarket, sell NO on Kalshi
-        if poly_no_ask and kalshi_no_bid:
-            gross = kalshi_no_bid - poly_no_ask
-            fees = (poly_no_ask * self.polymarket_taker_fee + 
-                    kalshi_no_bid * self.kalshi_taker_fee + 
-                    self.gas_cost * 2)
-            net = gross - fees
-            if net > best_net_edge and net >= self.min_edge:
-                best_net_edge = net
-                best_opp = self._create_opportunity(
-                    market_pair=market_pair,
-                    buy_platform="polymarket",
-                    sell_platform="kalshi",
-                    token="NO",
-                    buy_price=poly_no_ask,
-                    sell_price=kalshi_no_bid,
-                    gross_edge=gross,
-                    net_edge=net,
-                    buy_liquidity=polymarket_ob.no.asks.best_size or 0,
-                    sell_liquidity=kalshi_ob.no.bids.best_size or 0,
-                )
-        
-        # 4. Buy NO on Kalshi, sell NO on Polymarket
-        if kalshi_no_ask and poly_no_bid:
-            gross = poly_no_bid - kalshi_no_ask
-            fees = (kalshi_no_ask * self.kalshi_taker_fee + 
-                    poly_no_bid * self.polymarket_taker_fee + 
-                    self.gas_cost * 2)
-            net = gross - fees
-            if net > best_net_edge and net >= self.min_edge:
-                best_net_edge = net
-                best_opp = self._create_opportunity(
-                    market_pair=market_pair,
-                    buy_platform="kalshi",
-                    sell_platform="polymarket",
-                    token="NO",
-                    buy_price=kalshi_no_ask,
-                    sell_price=poly_no_bid,
-                    gross_edge=gross,
-                    net_edge=net,
-                    buy_liquidity=kalshi_ob.no.asks.best_size or 0,
-                    sell_liquidity=polymarket_ob.no.bids.best_size or 0,
-                )
+        # Every direction: buy `token` on one platform, sell it on the other.
+        for token in self.TOKENS:
+            for buy_platform, sell_platform in ((a, b), (b, a)):
+                buy_side = self._side(books[buy_platform], token).asks
+                sell_side = self._side(books[sell_platform], token).bids
+                buy_price, sell_price = buy_side.best_price, sell_side.best_price
+                if not buy_price or not sell_price:
+                    continue
+                gross = sell_price - buy_price
+                fees = self.fees.breakdown(buy_platform, sell_platform, buy_price, sell_price)
+                net = gross - fees.total
+                if net > best_net_edge and net >= floor:
+                    best_net_edge = net
+                    best_opp = self._create_opportunity(
+                        pair, buy_platform, sell_platform, token, buy_price, sell_price,
+                        gross, net, fees, buy_side, sell_side)
         
         if best_opp:
-            self._opportunities.append(best_opp)
-            logger.info(f"🎯 CROSS-PLATFORM ARB: {best_opp}")
+            if record:
+                self._opportunities.append(best_opp)
+                if len(self._opportunities) > 1000:
+                    self._opportunities = self._opportunities[-500:]
+            logger.info(f"CROSS-PLATFORM ARB: {best_opp}")
         
         return best_opp
     
+    @staticmethod
+    def _side(book: OrderBook, token: str):
+        return book.yes if token == "YES" else book.no
+    
     def _create_opportunity(
         self,
-        market_pair: MarketPair,
+        pair: MarketPair,
         buy_platform: str,
         sell_platform: str,
         token: str,
@@ -753,21 +847,36 @@ class CrossPlatformArbEngine:
         sell_price: float,
         gross_edge: float,
         net_edge: float,
-        buy_liquidity: float,
-        sell_liquidity: float,
+        fees,
+        buy_side,
+        sell_side,
     ) -> CrossPlatformOpportunity:
         """Create a cross-platform opportunity object."""
         self._opportunity_count += 1
         
-        # Calculate max size based on available liquidity
-        max_size = min(buy_liquidity, sell_liquidity)
+        buy_liquidity = top_of_book_size(buy_side)
+        sell_liquidity = top_of_book_size(sell_side)
+        known = [x for x in (buy_liquidity, sell_liquidity) if x is not None]
+        depth = min(known) if len(known) == 2 else None
+        max_size = min(known) if known else None
         
-        # Suggested size: smaller of max_size or $100 for safety
-        suggested_size = min(max_size, 100.0)
+        # Suggested size: smaller of max_size or 100 for safety
+        suggested_size = min(max_size, 100.0) if max_size is not None else 100.0
+        manual = "predictit" in (buy_platform, sell_platform)
+        if manual:
+            cap = self.predictit_max_contract_usd / max(buy_price, 0.01)
+            suggested_size = min(suggested_size, cap)
+        
+        slippage = None
+        if suggested_size > 0:
+            vwap_buy = walk_book(buy_side, suggested_size)
+            vwap_sell = walk_book(sell_side, suggested_size)
+            if vwap_buy is not None and vwap_sell is not None:
+                slippage = (vwap_buy - buy_price) + (sell_price - vwap_sell)
         
         return CrossPlatformOpportunity(
             opportunity_id=f"xplat_{self._opportunity_count}",
-            market_pair=market_pair,
+            market_pair=pair,
             buy_platform=buy_platform,
             sell_platform=sell_platform,
             token=token,
@@ -780,7 +889,32 @@ class CrossPlatformArbEngine:
             max_size=max_size,
             buy_liquidity=buy_liquidity,
             sell_liquidity=sell_liquidity,
+            fees=fees.to_dict(),
+            depth=depth,
+            slippage_estimate=slippage,
+            time_to_expiry=self._time_to_expiry(pair),
+            verification_status=pair.verification_status,
+            actionable=(pair.verification_status == "verified" and not pair.dismissed),
+            manual_trade=manual,
         )
+    
+    @staticmethod
+    def _time_to_expiry(pair: MarketPair) -> Optional[float]:
+        """Seconds until the earlier of the two end dates (None if unknown)."""
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        remaining = []
+        for ref in (pair.ref_a, pair.ref_b):
+            if ref is None or not ref.end_date:
+                continue
+            try:
+                end = datetime.fromisoformat(ref.end_date.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            remaining.append((end - now).total_seconds())
+        return min(remaining) if remaining else None
     
     def get_recent_opportunities(self, limit: int = 50) -> list[CrossPlatformOpportunity]:
         """Get most recent cross-platform opportunities."""
@@ -796,4 +930,3 @@ class CrossPlatformArbEngine:
                 if self._opportunities else 0
             ),
         }
-

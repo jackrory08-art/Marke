@@ -348,6 +348,21 @@ class PolymarketClient(BasePolymarketClient):
             # Parse outcome prices - JSON string like '[0.65, 0.35]'
             outcome_prices_str = data.get("outcomePrices", "")
             
+            outcomes: list[str] = []
+            try:
+                parsed_outcomes = json.loads(outcomes_str) if isinstance(outcomes_str, str) and outcomes_str else outcomes_str
+                if isinstance(parsed_outcomes, list):
+                    outcomes = [str(o) for o in parsed_outcomes]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            
+            end_date = None
+            if data.get("endDate"):
+                try:
+                    end_date = datetime.fromisoformat(str(data["endDate"]).replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            
             return Market(
                 market_id=market_id,
                 condition_id=condition_id,
@@ -361,6 +376,10 @@ class PolymarketClient(BasePolymarketClient):
                 volume_24h=float(data.get("volume24hr") or data.get("volume24hrClob") or 0),
                 liquidity=float(data.get("liquidityNum") or data.get("liquidityClob") or 0),
                 category=data.get("category", "") or "",
+                end_date=end_date,
+                resolution_source=data.get("resolutionSource", "") or "",
+                outcomes=outcomes,
+                slug=data.get("slug", "") or "",
             )
         except Exception as e:
             logger.warning(f"Failed to parse market: {e}")

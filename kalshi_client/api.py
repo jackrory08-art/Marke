@@ -301,6 +301,14 @@ class KalshiClient:
                 except:
                     pass
             
+            expiration_time = None
+            if data.get("expiration_time"):
+                try:
+                    expiration_time = datetime.fromisoformat(
+                        data["expiration_time"].replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    pass
+            
             return KalshiMarket(
                 ticker=data.get("ticker", ""),
                 event_ticker=data.get("event_ticker", ""),
@@ -314,7 +322,12 @@ class KalshiClient:
                 volume=data.get("volume", 0),
                 open_interest=data.get("open_interest", 0),
                 close_time=close_time,
+                expiration_time=expiration_time,
                 category=data.get("category", ""),
+                rules_primary=data.get("rules_primary", "") or "",
+                rules_secondary=data.get("rules_secondary", "") or "",
+                yes_sub_title=data.get("yes_sub_title", "") or "",
+                no_sub_title=data.get("no_sub_title", "") or "",
             )
         except Exception as e:
             logger.warning(f"Failed to parse Kalshi market: {e}")

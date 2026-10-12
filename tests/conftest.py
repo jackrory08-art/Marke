@@ -98,3 +98,31 @@ def all_routes(app):
         else:
             out.append((r.path, getattr(r, "methods", None) or {"WEBSOCKET"}))
     return out
+
+
+# ----------------------------------------------------------------- AI fixtures
+@pytest.fixture
+def ai_config(config):
+    config.ai.max_concurrency = 2
+    config.ai.requests_per_minute = 100000  # tests are not rate-limited
+    config.ai.provider = "mock"
+    return config.ai
+
+
+async def _no_sleep(_seconds):
+    import asyncio
+    await asyncio.sleep(0)
+
+
+@pytest.fixture
+def make_verifier(db, ai_config, clock):
+    """Factory: ``make_verifier(provider) -> (verifier, runner, budget_events)``."""
+    from core.ai.runner import AIRunner
+    from core.ai.verifier import MatchVerifier
+
+    def factory(provider):
+        events = []
+        runner = AIRunner(provider, db, ai_config, clock=clock, sleep=_no_sleep,
+                          jitter=lambda: 0.0, on_budget=events.append)
+        return MatchVerifier(runner, db, ai_config, clock=clock), runner, events
+    return factory

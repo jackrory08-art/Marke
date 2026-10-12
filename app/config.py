@@ -63,8 +63,6 @@ class AIConfig:
     analysis_min_interval_s: int = 900
     verifier_reserve_pct: int = 40
 
-    # Scanner
-    max_pairs_per_cycle: int = 25
 
 
 @dataclass

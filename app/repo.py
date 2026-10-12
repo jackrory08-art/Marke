@@ -7,7 +7,7 @@ Every function takes an open ``Session``; commit/rollback is the caller's
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -143,19 +143,31 @@ def get_usage_today(
 def record_usage(
     s: Session, provider: str, model: str, *, input_tokens: int = 0,
     output_tokens: int = 0, cost_usd: float = 0.0, now: Optional[datetime] = None,
-) -> AIUsageDaily:
+) -> None:
+    """Add one call to today's usage row. Atomic, so concurrent writers never lose a count."""
     day = utc_day(now)
-    row = s.get(AIUsageDaily, (day, provider, model))
-    if row is None:
-        row = AIUsageDaily(day=day, provider=provider, model=model, calls=0,
-                           input_tokens=0, output_tokens=0, cost_usd=0.0)
-        s.add(row)
-    row.calls += 1
-    row.input_tokens += input_tokens
-    row.output_tokens += output_tokens
-    row.cost_usd += cost_usd
-    s.flush()
-    return row
+
+    def bump() -> int:
+        res = s.execute(
+            update(AIUsageDaily)
+            .where(AIUsageDaily.day == day, AIUsageDaily.provider == provider,
+                   AIUsageDaily.model == model)
+            .values(calls=AIUsageDaily.calls + 1,
+                    input_tokens=AIUsageDaily.input_tokens + input_tokens,
+                    output_tokens=AIUsageDaily.output_tokens + output_tokens,
+                    cost_usd=AIUsageDaily.cost_usd + cost_usd))
+        return res.rowcount or 0
+
+    if bump():
+        return
+    try:
+        with s.begin_nested():
+            s.add(AIUsageDaily(day=day, provider=provider, model=model, calls=1,
+                               input_tokens=input_tokens, output_tokens=output_tokens,
+                               cost_usd=cost_usd))
+            s.flush()
+    except IntegrityError:  # someone else created the row first
+        bump()
 
 
 # ------------------------------------------------------- opportunity history
