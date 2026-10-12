@@ -472,10 +472,47 @@ class MarketMatcher:
         
         return False, 0.0
     
+    # ------------------------------------------------------------------
+    # Per-text features, computed once per market instead of once per pair.
+    # The matcher compares every market against thousands of others, so this
+    # is what keeps matching fast. Results are identical to computing them
+    # inside every comparison.
+    # ------------------------------------------------------------------
+    _SPORT_KEYWORDS = ["nfl", "nba", "mlb", "nhl", "football", "basketball", "baseball", "hockey"]
+    _CRYPTO_KEYWORDS = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol"]
+    _PERSON_PATTERNS = [
+        r'\b(trump|biden|harris|desantis|obama|pence)\b',
+        r'\b(musk|zuckerberg|bezos|gates)\b',
+        r'\b(powell|yellen)\b',
+    ]
+    _ACTION_PATTERN = r'\b(win|lose|approve|poll|elect|resign|indicted?|convicted?)\w*\b'
+    
+    def _features(self, text: str) -> dict:
+        cache = self.__dict__.setdefault("_feature_cache", {})
+        f = cache.get(text)
+        if f is None:
+            lower = text.lower()
+            persons = set()
+            for pattern in self._PERSON_PATTERNS:
+                persons.update(re.findall(pattern, lower))
+            f = {
+                "teams": self.extract_teams(text),
+                "date": self.extract_date(text),
+                "persons": persons,
+                "actions": set(re.findall(self._ACTION_PATTERN, lower)),
+                "norm": self.normalize_text(text),
+                "entities": self.extract_key_entities(text),
+                "sports": {k for k in self._SPORT_KEYWORDS if k in lower},
+                "crypto": {k for k in self._CRYPTO_KEYWORDS if k in lower},
+            }
+            cache[text] = f
+        return f
+    
     def calculate_similarity(
         self,
         polymarket_question: str,
         kalshi_title: str,
+        floor: float = 0.0,
     ) -> float:
         """
         Calculate similarity score between two market questions.
@@ -486,54 +523,60 @@ class MarketMatcher:
         3. Fuzzy text similarity
         4. Entity overlap
         
+        ``floor`` is an optimisation hint for bulk matching: any score at or above
+        ``floor`` is exact; below it, an upper bound under ``floor`` may be
+        returned instead (the expensive fuzzy step is skipped when it cannot reach
+        the floor). With the default ``floor=0`` the result is always exact.
+        
         Returns:
             Float between 0 and 1
         """
+        f1, f2 = self._features(polymarket_question), self._features(kalshi_title)
+        
         # First check for sports matchup (highest priority)
-        is_sports, sports_score = self.is_sports_match(polymarket_question, kalshi_title)
-        if is_sports and sports_score > 0.7:
-            return sports_score
+        teams1, teams2 = f1["teams"], f2["teams"]
+        if len(teams1) >= 2 and len(teams2) >= 2:
+            set1, set2 = set(teams1[:2]), set(teams2[:2])
+            if set1 == set2:
+                if self.dates_match(f1["date"], f2["date"]):
+                    return 0.95  # Very high confidence for exact team + date match
+            else:
+                overlap = set1 & set2
+                if len(overlap) >= 1 and self.dates_match(f1["date"], f2["date"]):
+                    score = 0.7 + (0.2 * len(overlap) / 2)
+                    if score > 0.7:
+                        return score
         
         # Check for same person/event predictions
-        is_person, person_score = self.is_same_person_event(polymarket_question, kalshi_title)
-        if is_person and person_score > 0.7:
-            return person_score
+        if f1["persons"] and f2["persons"] and f1["persons"] & f2["persons"]:
+            if f1["actions"] & f2["actions"]:
+                return 0.85  # Same person + same type of prediction
         
-        # Normalize texts
-        norm_poly = self.normalize_text(polymarket_question)
-        norm_kalshi = self.normalize_text(kalshi_title)
+        # Entity overlap
+        e1, e2 = f1["entities"], f2["entities"]
+        overlap_ratio = None
+        if e1 and e2:
+            overlap_ratio = len(e1 & e2) / max(len(e1), len(e2))
         
-        # Base text similarity using SequenceMatcher (fuzzy matching)
-        text_sim = SequenceMatcher(None, norm_poly, norm_kalshi).ratio()
+        # Boosts
+        boost_sport = bool(f1["sports"] and f2["sports"] and f1["sports"] & f2["sports"])
+        boost_crypto = bool(f1["crypto"] and f2["crypto"] and f1["crypto"] & f2["crypto"])
         
-        # Entity overlap bonus
-        poly_entities = self.extract_key_entities(polymarket_question)
-        kalshi_entities = self.extract_key_entities(kalshi_title)
+        def combine(text_sim: float) -> float:
+            combined = text_sim if overlap_ratio is None else 0.5 * text_sim + 0.5 * overlap_ratio
+            if boost_sport:
+                combined = min(1.0, combined + 0.15)
+            if boost_crypto:
+                combined = min(1.0, combined + 0.2)
+            return combined
         
-        if poly_entities and kalshi_entities:
-            entity_overlap = len(poly_entities & kalshi_entities) / max(len(poly_entities), len(kalshi_entities))
-            # Weighted combination
-            combined_sim = 0.5 * text_sim + 0.5 * entity_overlap
-        else:
-            combined_sim = text_sim
-        
-        # Boost if both mention same sport type
-        sport_keywords = ["nfl", "nba", "mlb", "nhl", "football", "basketball", "baseball", "hockey"]
-        poly_sports = [s for s in sport_keywords if s in polymarket_question.lower()]
-        kalshi_sports = [s for s in sport_keywords if s in kalshi_title.lower()]
-        
-        if poly_sports and kalshi_sports and set(poly_sports) & set(kalshi_sports):
-            combined_sim = min(1.0, combined_sim + 0.15)
-        
-        # Boost for crypto predictions mentioning same coin
-        crypto_keywords = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol"]
-        poly_crypto = [c for c in crypto_keywords if c in polymarket_question.lower()]
-        kalshi_crypto = [c for c in crypto_keywords if c in kalshi_title.lower()]
-        
-        if poly_crypto and kalshi_crypto and set(poly_crypto) & set(kalshi_crypto):
-            combined_sim = min(1.0, combined_sim + 0.2)
-        
-        return combined_sim
+        matcher = SequenceMatcher(None, f1["norm"], f2["norm"])
+        if floor > 0.0:
+            # quick_ratio() is an upper bound of ratio(), and combine() is monotonic
+            bound = combine(matcher.quick_ratio())
+            if bound < floor:
+                return bound
+        return combine(matcher.ratio())
     
     def _categorize_market(self, text: str) -> str:
         """Detect category from market text. Order matters - check politics before sports!"""
@@ -659,7 +702,9 @@ class MarketMatcher:
                 best_score = 0.0
                 
                 for ref_b in cat_b:
-                    score = self.calculate_similarity(ref_a.title, ref_b.title)
+                    score = self.calculate_similarity(
+                        ref_a.title, ref_b.title,
+                        floor=max(best_score, self.min_similarity))
                     
                     if score > best_score:
                         best_score = score
