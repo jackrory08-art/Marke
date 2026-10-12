@@ -107,6 +107,11 @@ class TradingBotWithDashboard:
         apply_overrides(self.config, self.db)
         bootstrap_owner_from_env(self.db)
         
+        # Start the web server first: loading thousands of markets takes a while, and
+        # hosting platforms expect the port (and /healthz) to answer promptly.
+        await self._start_server()
+        logger.info(f"Dashboard listening on http://{self.host}:{self.port}")
+        
         # Initialize Polymarket API client
         self.client = PolymarketClient(
             rest_url=self.config.api.polymarket_rest_url,
@@ -222,9 +227,6 @@ class TradingBotWithDashboard:
         # Start fill simulation for dry run
         if self.config.is_dry_run and self.config.mode.simulate_fills:
             asyncio.create_task(self._simulate_fills())
-        
-        # Start the web server
-        await self._start_server()
         
         logger.info("Bot and dashboard started successfully!")
         logger.info(f"Open http://{self.host}:{self.port} in your browser and sign in")

@@ -246,12 +246,23 @@ class PolymarketClient(BasePolymarketClient):
                 params["limit"] = limit
                 params["offset"] = offset
                 
-                data = await self._request(
-                    "GET", 
-                    "/markets",
-                    params=params,
-                    base_url=self.gamma_url,
-                )
+                try:
+                    data = await self._request(
+                        "GET", 
+                        "/markets",
+                        params=params,
+                        base_url=self.gamma_url,
+                    )
+                except httpx.HTTPStatusError as e:
+                    # The API rejects offsets past its pagination limit (HTTP 422).
+                    # Keep what was fetched instead of failing the whole startup.
+                    if all_markets and 400 <= e.response.status_code < 500:
+                        logger.warning(
+                            f"Polymarket stopped paginating at offset={offset} "
+                            f"(HTTP {e.response.status_code}); using the {len(all_markets)} "
+                            f"markets already loaded")
+                        break
+                    raise
                 
                 if not data:
                     break
