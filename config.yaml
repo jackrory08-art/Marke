@@ -81,6 +81,8 @@ mode:
   cross_platform_enabled: true    # Enable cross-platform arbitrage detection
   kalshi_enabled: true            # Enable Kalshi market monitoring
   min_match_similarity: 0.6       # Minimum similarity score for market matching (0-1)
+  scan_interval_s: 10             # How often matched pairs are re-priced
+  scan_max_pairs_per_cycle: 25    # Caps order-book requests per scan
   
   # Dry run settings
   dry_run_initial_balance: 10000

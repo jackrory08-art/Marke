@@ -37,6 +37,8 @@ from core.portfolio import Portfolio
 from core.cross_platform_arb import CrossPlatformArbEngine, MarketMatcher
 from core.cross_platform_scanner import CrossPlatformScanner
 from core.pair_store import PairStore
+from core.market_ref import from_kalshi, from_polymarket
+from predictit_client.api import build_predictit_client
 from app import repo
 from app.db import Database, init_database
 from app.settings import apply_overrides
@@ -74,6 +76,7 @@ class TradingBotWithDashboard:
         self._kalshi_markets = []
         self._matched_pairs = []
         self._kalshi_entered = False
+        self.predictit = None
         self.pair_store = PairStore()
         self.ai = None
         self.scanner = None
@@ -117,13 +120,15 @@ class TradingBotWithDashboard:
         if self.config.use_simulation and self.config.mode.cross_platform_enabled:
             self._start_simulated_cross_platform()
         # Initialize Kalshi client (if cross-platform enabled)
-        elif self.config.mode.cross_platform_enabled and self.config.mode.kalshi_enabled:
-            logger.info("Initializing Kalshi client for cross-platform arbitrage...")
-            self.kalshi_client = KalshiClient(
-                timeout=self.config.api.timeout_seconds,
-                max_retries=self.config.api.max_retries,
-                dry_run=self.config.is_dry_run,
-            )
+        elif self.config.mode.cross_platform_enabled and (
+                self.config.mode.kalshi_enabled or self.config.predictit.enabled):
+            if self.config.mode.kalshi_enabled:
+                logger.info("Initializing Kalshi client for cross-platform arbitrage...")
+                self.kalshi_client = KalshiClient(
+                    timeout=self.config.api.timeout_seconds,
+                    max_retries=self.config.api.max_retries,
+                    dry_run=self.config.is_dry_run,
+                )
             
             # Initialize cross-platform arbitrage engine
             self.cross_platform_engine = CrossPlatformArbEngine(
@@ -137,7 +142,11 @@ class TradingBotWithDashboard:
             self._setup_cross_platform_services()
             
             # Start Kalshi monitoring in background
-            self._background_tasks.append(asyncio.create_task(self._start_kalshi_monitoring()))
+            if self.kalshi_client:
+                self._background_tasks.append(asyncio.create_task(self._start_kalshi_monitoring()))
+            
+            # PredictIt (read-only, off by default)
+            self._ensure_predictit()
         
         # Initialize portfolio
         initial_balance = (
@@ -391,6 +400,7 @@ class TradingBotWithDashboard:
             fetchers=fetchers or {
                 "polymarket": self._fetch_polymarket_book,
                 "kalshi": self._fetch_kalshi_book,
+                "predictit": self._fetch_predictit_book,
             },
             state=dashboard_state, db=self.db, config=self.config,
             emit=dashboard_state.emit,
@@ -403,6 +413,10 @@ class TradingBotWithDashboard:
         self.scanner.analyst = self.ai.analyst
         dashboard_state.ai = self.ai
         dashboard_state.scanner = self.scanner
+        async def on_predictit_toggled(enabled: bool) -> None:
+            if enabled:
+                self._ensure_predictit()
+        dashboard_state.setting_hooks["predictit.enabled"] = on_predictit_toggled
         dashboard_state.setting_hooks["ai.enabled"] = (
             lambda enabled: self.ai.on_enabled_changed(enabled, self.scanner))
         self.ai.queue.start()
@@ -416,6 +430,67 @@ class TradingBotWithDashboard:
     async def _fetch_polymarket_book(self, market_id: str):
         state = self.data_feed.get_market_state(market_id) if self.data_feed else None
         return state.order_book if state else None
+    
+    async def _fetch_predictit_book(self, contract_key: str):
+        return await self.predictit.fetch_orderbook(contract_key) if self.predictit else None
+    
+    def _ensure_predictit(self) -> None:
+        """Start the PredictIt poller if enabled and not already running."""
+        if self.predictit is not None or not self.config.predictit.enabled \
+                or self.cross_platform_engine is None or self.config.use_simulation:
+            return
+        self.predictit = build_predictit_client(self.config)
+        if self.predictit is None:
+            return
+        logger.info("PredictIt enabled (read-only; data is licensed for non-commercial use)")
+        self._background_tasks.append(asyncio.create_task(self._predictit_loop()))
+    
+    async def _predictit_loop(self) -> None:
+        """Poll PredictIt, and match its contracts against Polymarket and Kalshi."""
+        polls = 0
+        while self._running:
+            try:
+                markets = await self.predictit.get_markets()
+                dashboard_state.cross_platform["predictit_markets"] = len(markets)
+                # Match on the first successful poll, then every ~30 minutes for new contracts
+                every = max(1, int(1800 / self.predictit.poll_interval_s))
+                if markets and polls % every == 0:
+                    await self._match_predictit()
+                polls += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("PredictIt poll failed")
+            await asyncio.sleep(self.predictit.poll_interval_s)
+    
+    async def _match_predictit(self) -> None:
+        pi_refs = self.predictit.comparable_markets()
+        if not pi_refs or self.data_feed is None:
+            return
+        sources = [[from_polymarket(m) for m in self.data_feed._markets.values() if m.active]]
+        if self._kalshi_markets:
+            sources.append([from_kalshi(k) for k in self._kalshi_markets if k.is_active])
+        pairs = []
+        for refs in sources:
+            if refs:
+                pairs.extend(await self._match_in_thread(refs, pi_refs))
+        new_pairs = self.pair_store.add_many(pairs)
+        if self.ai is not None:
+            self.ai.queue.enqueue_pending()
+        dashboard_state.cross_platform["matched_pairs"] = len(self.pair_store.all())
+        logger.info("PredictIt matching: %d pairs, %d new", len(pairs), len(new_pairs))
+    
+    async def _match_in_thread(self, refs_a: list, refs_b: list) -> list:
+        """Run the (CPU-bound) matcher off the event loop."""
+        loop = asyncio.get_running_loop()
+        
+        def run():
+            inner = asyncio.new_event_loop()
+            try:
+                return inner.run_until_complete(self.market_matcher.match_refs(refs_a, refs_b))
+            finally:
+                inner.close()
+        return await loop.run_in_executor(None, run)
     
     async def _fetch_kalshi_book(self, ticker: str):
         if not self.kalshi_client or not self._kalshi_entered:
@@ -531,6 +606,8 @@ class TradingBotWithDashboard:
             task.cancel()
         if self.kalshi_client and self._kalshi_entered:
             await self.kalshi_client.__aexit__(None, None, None)
+        if self.predictit:
+            await self.predictit.aclose()
         
         if self._server:
             self._server.should_exit = True
