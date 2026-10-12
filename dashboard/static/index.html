@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket Arbitrage Dashboard</title>
+    <link rel="stylesheet" href="/static/css/legacy.css">
+</head>
+<body>
+    <header class="header">
+        <div class="logo">⚡ Polymarket Arbitrage</div>
+        <div class="status">
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <span class="mode-badge" id="modeBadge">DRY RUN</span>
+        </div>
+    </header>
+    
+    <main class="dashboard">
+        <!-- Metrics Row -->
+        <section class="metrics">
+            <div class="metric-card">
+                <div class="metric-label">Total PnL</div>
+                <div class="metric-value" id="totalPnl">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Realized PnL</div>
+                <div class="metric-value" id="realizedPnl">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Exposure</div>
+                <div class="metric-value neutral" id="exposure">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Open Orders</div>
+                <div class="metric-value neutral" id="openOrders">0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Opportunities</div>
+                <div class="metric-value neutral" id="opportunityCount">0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value" id="winRate">0%</div>
+            </div>
+        </section>
+        
+        <!-- Opportunities -->
+        <section class="card opportunities-card">
+            <div class="card-header">
+                <span class="card-title">Live Opportunities</span>
+                <span class="u1" id="oppRefresh"></span>
+            </div>
+            <div class="card-body">
+                <div class="opportunity-list" id="opportunityList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📊</div>
+                        <div>Waiting for opportunities...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Activity Feed -->
+        <section class="card activity-card">
+            <div class="card-header">
+                <span class="card-title">Activity Feed</span>
+            </div>
+            <div class="card-body">
+                <div class="activity-list" id="activityList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📝</div>
+                        <div>No activity yet...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Portfolio -->
+        <section class="card portfolio-card">
+            <div class="card-header">
+                <span class="card-title">Positions</span>
+            </div>
+            <div class="card-body">
+                <div class="position-list" id="positionList">
+                    <div class="empty-state">
+                        <div class="empty-icon">💼</div>
+                        <div>No open positions</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Risk -->
+        <section class="card risk-card">
+            <div class="card-header">
+                <span class="card-title">Risk Metrics</span>
+            </div>
+            <div class="card-body">
+                <div class="risk-item">
+                    <div class="risk-label">
+                        <span>Global Exposure</span>
+                        <span id="riskExposure">$0 / $5,000</span>
+                    </div>
+                    <div class="risk-bar">
+                        <div class="risk-bar-fill safe u2" id="exposureBar"></div>
+                    </div>
+                </div>
+                <div class="risk-item">
+                    <div class="risk-label">
+                        <span>Daily P&L</span>
+                        <span id="riskDailyPnl">$0 / -$500</span>
+                    </div>
+                    <div class="risk-bar">
+                        <div class="risk-bar-fill safe u2" id="dailyPnlBar"></div>
+                    </div>
+                </div>
+                <div class="risk-item">
+                    <div class="risk-label">
+                        <span>Drawdown</span>
+                        <span id="riskDrawdown">0% / 10%</span>
+                    </div>
+                    <div class="risk-bar">
+                        <div class="risk-bar-fill safe u2" id="drawdownBar"></div>
+                    </div>
+                </div>
+                <div class="u3" id="killSwitch">
+                    ⚠️ KILL SWITCH ACTIVE
+                </div>
+            </div>
+        </section>
+        
+        <!-- Operational Stats -->
+        <section class="card operational-card">
+            <div class="card-header">
+                <span class="card-title">🔄 Operational Stats</span>
+                <span class="u4" id="streamStatus">● Streaming</span>
+            </div>
+            <div class="card-body">
+                <div class="op-stats-grid">
+                    <div class="op-stat">
+                        <div class="op-stat-value" id="totalMarkets">0</div>
+                        <div class="op-stat-label">Total Markets</div>
+                    </div>
+                    <div class="op-stat">
+                        <div class="op-stat-value" id="marketsWithData">0</div>
+                        <div class="op-stat-label">With Order Books</div>
+                    </div>
+                    <div class="op-stat">
+                        <div class="op-stat-value" id="marketsWithPrices">0</div>
+                        <div class="op-stat-label">With Prices</div>
+                    </div>
+                    <div class="op-stat">
+                        <div class="op-stat-value active" id="orderbookUpdates">0</div>
+                        <div class="op-stat-label">Orderbook Updates</div>
+                    </div>
+                    <div class="op-stat">
+                        <div class="op-stat-value" id="cycleTime">--</div>
+                        <div class="op-stat-label">Est. Cycle Time</div>
+                    </div>
+                    <div class="op-stat">
+                        <div class="op-stat-value" id="updatesPerMin">0</div>
+                        <div class="op-stat-label">Updates/Min</div>
+                    </div>
+                </div>
+                <div class="uptime-display">
+                    <span class="u5">UPTIME: </span>
+                    <span class="uptime-value" id="uptime">00:00:00</span>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Cross-Platform Arbitrage (Polymarket + Kalshi) -->
+        <section class="card cross-platform-card" id="crossPlatformCard">
+            <div class="card-header cross-platform-header">
+                <span class="card-title">🔀 Cross-Platform Arbitrage</span>
+                <span class="cross-platform-badge" id="crossPlatformStatus">DISABLED</span>
+            </div>
+            <div class="card-body">
+                <!-- Matching Progress Bar -->
+                <div class="u6" id="matchingProgressContainer">
+                    <div class="u7">
+                        <span class="u8">🔍 Matching markets by category...</span>
+                        <span class="u9" id="matchingProgressText">0%</span>
+                    </div>
+                    <div class="u10">
+                        <div class="u11" id="matchingProgressBar"></div>
+                    </div>
+                    <div class="u12" id="matchingStats">
+                        Checked: 0 / 0 comparisons | Found: 0 matches
+                    </div>
+                </div>
+                
+                <div class="platform-stats u13">
+                    <div class="platform-stat">
+                        <div class="platform-stat-value polymarket" id="polymarketMarkets">0</div>
+                        <div class="platform-stat-label">Polymarket</div>
+                        <div class="platform-stat-status" id="polymarketStatus">Loading...</div>
+                    </div>
+                    <div class="platform-stat">
+                        <div class="platform-stat-value kalshi" id="kalshiMarkets">0</div>
+                        <div class="platform-stat-label">Kalshi</div>
+                        <div class="platform-stat-status" id="kalshiStatus">Loading...</div>
+                    </div>
+                    <div class="platform-stat">
+                        <div class="platform-stat-value matched" id="matchedPairs">0</div>
+                        <div class="platform-stat-label">Matched</div>
+                        <div class="platform-stat-status" id="matchingStatus">Waiting...</div>
+                    </div>
+                    <div class="platform-stat">
+                        <div class="platform-stat-value cross-opp" id="crossOpportunities">0</div>
+                        <div class="platform-stat-label">Arb Found</div>
+                        <div class="platform-stat-status" id="arbStatus">Scanning...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 🔥 LIVE OPPORTUNITIES FEED -->
+        <section class="card opportunities-feed">
+            <div class="card-header">
+                <span class="card-title">🔥 Live Arbitrage Opportunities</span>
+                <div class="u14">
+                    <span class="opp-status">
+                        <span class="opp-status-dot"></span>
+                        Scanning
+                    </span>
+                    <span class="u15" id="oppCount">0 found</span>
+                </div>
+            </div>
+            <div class="card-body" id="opportunitiesFeed">
+                <div class="no-opportunities" id="noOpportunities">
+                    <div class="u16">🔍</div>
+                    <div class="u17">Scanning for arbitrage...</div>
+                    <div class="u18">Checking Polymarket, Kalshi, and cross-platform opportunities</div>
+                </div>
+                <!-- Opportunities will be inserted here dynamically -->
+            </div>
+        </section>
+        
+        <!-- Opportunity Timing -->
+        <section class="card timing-card">
+            <div class="card-header">
+                <span class="card-title">⏱️ Opportunity Timing</span>
+                <span class="u19" id="timingCount">0 tracked</span>
+            </div>
+            <div class="card-body">
+                <div class="timing-stats">
+                    <div class="timing-stat">
+                        <div class="timing-stat-value" id="avgDuration">--</div>
+                        <div class="timing-stat-label">Avg Duration</div>
+                    </div>
+                    <div class="timing-stat">
+                        <div class="timing-stat-value" id="minDuration">--</div>
+                        <div class="timing-stat-label">Min Duration</div>
+                    </div>
+                    <div class="timing-stat">
+                        <div class="timing-stat-value" id="maxDuration">--</div>
+                        <div class="timing-stat-label">Max Duration</div>
+                    </div>
+                    <div class="timing-stat">
+                        <div class="timing-stat-value" id="activeOpps">0</div>
+                        <div class="timing-stat-label">Active Now</div>
+                    </div>
+                </div>
+                <div class="timing-buckets">
+                    <div class="timing-bucket fast">
+                        <span class="timing-bucket-count" id="under100ms">0</span>
+                        <div>&lt;100ms</div>
+                    </div>
+                    <div class="timing-bucket medium">
+                        <span class="timing-bucket-count" id="under500ms">0</span>
+                        <div>&lt;500ms</div>
+                    </div>
+                    <div class="timing-bucket slow">
+                        <span class="timing-bucket-count" id="under1s">0</span>
+                        <div>&lt;1s</div>
+                    </div>
+                    <div class="timing-bucket very-slow">
+                        <span class="timing-bucket-count" id="over1s">0</span>
+                        <div>&gt;1s</div>
+                    </div>
+                </div>
+                <div class="timing-recent" id="recentTimings">
+                    <div class="u20">
+                        Waiting for opportunity data...
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Markets -->
+        <section class="card markets-card">
+            <div class="card-header">
+                <span class="card-title">Monitored Markets</span>
+            </div>
+            <div class="card-body">
+                <div id="marketList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📈</div>
+                        <div>Loading markets...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <div class="connection-status" id="connectionStatus">
+        Connecting...
+    </div>
+    
+    <script src="/static/js/legacy.js"></script>
+</body>
+</html>
