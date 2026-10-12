@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: marke:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: sqlite:////data/marke.db
+    ports:
+      # Loopback only. For remote access put an HTTPS reverse proxy in front
+      # (see docs/deploy.md); do not publish this port on 0.0.0.0.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - marke-data:/data
+      # To use your own settings instead of the baked-in config.yaml:
+      # - ./config.yaml:/app/config.yaml:ro
+
+volumes:
+  marke-data:
