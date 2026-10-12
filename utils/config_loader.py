@@ -5,12 +5,25 @@ Configuration Loader
 Loads and validates configuration from YAML files.
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+from app.config import AIConfig, DatabaseConfig, PredictItConfig, ServerConfig
+
+logger = logging.getLogger(__name__)
+
+# Credentials must come from the environment (or .env), not config.yaml.
+_SECRET_ENV_MAP = {
+    "api_key": "POLYMARKET_API_KEY",
+    "api_secret": "POLYMARKET_API_SECRET",
+    "passphrase": "POLYMARKET_PASSPHRASE",
+    "private_key": "POLYMARKET_PRIVATE_KEY",
+}
 
 
 class ConfigError(Exception):
@@ -109,6 +122,10 @@ class BotConfig:
     mode: ModeConfig = field(default_factory=ModeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
+    predictit: PredictItConfig = field(default_factory=PredictItConfig)
     
     @property
     def is_dry_run(self) -> bool:
@@ -158,14 +175,16 @@ def load_config(config_path: str = "config.yaml") -> BotConfig:
     mode_data = raw_config.get("mode", {})
     logging_data = raw_config.get("logging", {})
     monitoring_data = raw_config.get("monitoring", {})
+    server_data = raw_config.get("server") or {}
+    database_data = raw_config.get("database") or {}
+    ai_data = raw_config.get("ai") or {}
+    predictit_data = raw_config.get("predictit") or {}
+    
+    _warn_secrets_in_yaml(api_data, config_path)
     
     # Handle environment variable overrides
-    api_data = _apply_env_overrides(api_data, {
-        "api_key": "POLYMARKET_API_KEY",
-        "api_secret": "POLYMARKET_API_SECRET",
-        "passphrase": "POLYMARKET_PASSPHRASE",
-        "private_key": "POLYMARKET_PRIVATE_KEY",
-    })
+    api_data = _apply_env_overrides(api_data, _SECRET_ENV_MAP)
+    database_data = _apply_env_overrides(database_data, {"url": "DATABASE_URL"})
     
     # Build config objects
     config = BotConfig(
@@ -175,12 +194,28 @@ def load_config(config_path: str = "config.yaml") -> BotConfig:
         mode=_build_dataclass(ModeConfig, mode_data),
         logging=_build_dataclass(LoggingConfig, logging_data),
         monitoring=_build_dataclass(MonitoringConfig, monitoring_data),
+        server=_build_dataclass(ServerConfig, server_data),
+        database=_build_dataclass(DatabaseConfig, database_data),
+        ai=_build_dataclass(AIConfig, ai_data),
+        predictit=_build_dataclass(PredictItConfig, predictit_data),
     )
     
     # Validate
-    _validate_config(config)
+    validate_config(config)
     
     return config
+
+
+def _warn_secrets_in_yaml(api_data: dict, config_path: str) -> None:
+    """Warn when real-looking credentials are stored in the YAML file."""
+    for key in _SECRET_ENV_MAP:
+        value = api_data.get(key)
+        if value and not str(value).startswith("YOUR_"):
+            logger.warning(
+                "api.%s is set in %s. Storing credentials in the config file is "
+                "deprecated; set %s in the environment or .env instead.",
+                key, config_path, _SECRET_ENV_MAP[key],
+            )
 
 
 def _apply_env_overrides(data: dict, env_map: dict[str, str]) -> dict:
@@ -202,8 +237,8 @@ def _build_dataclass(cls, data: dict):
     return cls(**filtered_data)
 
 
-def _validate_config(config: BotConfig) -> None:
-    """Validate configuration values."""
+def validate_config(config: BotConfig) -> None:
+    """Validate configuration values (call again after CLI overrides)."""
     errors = []
     
     # Trading validation
@@ -236,12 +271,19 @@ def _validate_config(config: BotConfig) -> None:
     if config.mode.trading_mode.lower() not in ("live", "dry_run"):
         errors.append("mode.trading_mode must be 'live' or 'dry_run'")
     
-    # Live mode checks
+    # Live trading is not implemented: order placement is an unsigned stub.
     if config.is_live:
-        if not config.api.api_key or config.api.api_key == "YOUR_API_KEY_HERE":
-            errors.append("api.api_key is required for live trading")
-        if not config.api.private_key or config.api.private_key == "YOUR_PRIVATE_KEY_HERE":
-            errors.append("api.private_key is required for live trading")
+        errors.append("live trading is disabled in this build (use dry_run)")
+    
+    # AI / server validation
+    if not 0 <= config.ai.min_confidence <= 1 or not 0 <= config.ai.min_confidence_caveats <= 1:
+        errors.append("ai.min_confidence and ai.min_confidence_caveats must be between 0 and 1")
+    if config.ai.provider.lower() not in ("gemini", "anthropic", "mock"):
+        errors.append("ai.provider must be one of: gemini, anthropic, mock")
+    if not 0 <= config.ai.verifier_reserve_pct <= 100:
+        errors.append("ai.verifier_reserve_pct must be between 0 and 100")
+    if not 1 <= config.server.port <= 65535:
+        errors.append("server.port must be a valid TCP port")
     
     if errors:
         raise ConfigError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
@@ -266,3 +308,7 @@ def get_default_config() -> BotConfig:
     """Get a default configuration."""
     return BotConfig()
 
+
+
+# Backwards-compatible alias
+_validate_config = validate_config

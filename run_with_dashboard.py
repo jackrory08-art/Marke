@@ -7,9 +7,13 @@ Starts the trading bot and web dashboard together.
 Supports cross-platform arbitrage between Polymarket and Kalshi.
 
 Usage:
-    python run_with_dashboard.py              # Dry run mode
-    python run_with_dashboard.py --live       # Live mode
-    python run_with_dashboard.py --port 8080  # Custom port
+    python run_with_dashboard.py                  # Dry run, http://127.0.0.1:8000
+    python run_with_dashboard.py --port 8080      # Custom port
+    python run_with_dashboard.py --host 0.0.0.0   # Bind all interfaces (use HTTPS in front)
+
+Create the login first:  python -m app.create_user --username owner
+
+Advisory tool: nothing here places orders. Live trading is disabled in this build.
 """
 
 import argparse
@@ -21,6 +25,7 @@ import threading
 from datetime import datetime
 
 import uvicorn
+from dotenv import load_dotenv
 
 from polymarket_client import PolymarketClient
 from kalshi_client import KalshiClient
@@ -30,9 +35,9 @@ from core.execution import ExecutionEngine, ExecutionConfig
 from core.risk_manager import RiskManager, RiskConfig
 from core.portfolio import Portfolio
 from core.cross_platform_arb import CrossPlatformArbEngine, MarketMatcher
-from utils.config_loader import load_config, BotConfig
+from utils.config_loader import load_config, validate_config, BotConfig
 from utils.logging_utils import setup_logging
-from dashboard.server import app, dashboard_state
+from dashboard.server import create_app, dashboard_state
 from dashboard.integration import DashboardIntegration
 
 
@@ -42,8 +47,9 @@ logger = logging.getLogger(__name__)
 class TradingBotWithDashboard:
     """Trading bot with integrated dashboard."""
     
-    def __init__(self, config: BotConfig, port: int = 8888):
+    def __init__(self, config: BotConfig, host: str = "127.0.0.1", port: int = 8000):
         self.config = config
+        self.host = host
         self.port = port
         self._running = False
         
@@ -74,7 +80,7 @@ class TradingBotWithDashboard:
         logger.info("=" * 60)
         logger.info(f"Mode: {'DRY RUN' if self.config.is_dry_run else 'LIVE'}")
         logger.info(f"Cross-Platform: {'ENABLED' if self.config.mode.cross_platform_enabled else 'DISABLED'}")
-        logger.info(f"Dashboard: http://localhost:{self.port}")
+        logger.info(f"Dashboard: http://{self.host}:{self.port}")
         logger.info("=" * 60)
         
         self._running = True
@@ -185,13 +191,20 @@ class TradingBotWithDashboard:
         await self._start_server()
         
         logger.info("Bot and dashboard started successfully!")
-        logger.info(f"Open http://localhost:{self.port} in your browser")
+        logger.info(f"Open http://{self.host}:{self.port} in your browser and sign in")
     
     async def _start_server(self) -> None:
         """Start the uvicorn server."""
+        loopback = self.host in ("127.0.0.1", "localhost", "::1")
+        if not loopback and not self.config.server.cookie_secure:
+            logger.warning(
+                "Dashboard is bound to %s with server.cookie_secure=false: session "
+                "cookies would travel over plain HTTP. Put an HTTPS reverse proxy "
+                "in front and set cookie_secure: true (see docs/deploy.md).", self.host)
+        app = create_app(self.config)
         config = uvicorn.Config(
             app,
-            host="0.0.0.0",
+            host=self.host,
             port=self.port,
             log_level="warning",
             access_log=False,
@@ -450,8 +463,18 @@ async def main_async(args: argparse.Namespace) -> None:
     elif args.dry_run:
         config.mode.trading_mode = "dry_run"
     
+    # --live is rejected by validation: live trading is disabled in this build
+    try:
+        validate_config(config)
+    except Exception as e:
+        logger.error(f"{e}")
+        sys.exit(1)
+    
+    host = args.host or config.server.host
+    port = args.port or config.server.port
+    
     # Create and run bot with dashboard
-    bot = TradingBotWithDashboard(config, port=args.port)
+    bot = TradingBotWithDashboard(config, host=host, port=port)
     
     # Handle shutdown
     loop = asyncio.get_event_loop()
@@ -492,16 +515,22 @@ def main() -> None:
     )
     
     parser.add_argument(
+        "--host",
+        default=None,
+        help="Dashboard bind address (default: server.host, 127.0.0.1)"
+    )
+    
+    parser.add_argument(
         "--port",
         type=int,
-        default=8888,
-        help="Dashboard port (default: 8888)"
+        default=None,
+        help="Dashboard port (default: server.port, 8000)"
     )
     
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Run in live mode"
+        help="Rejected: live trading is disabled in this build"
     )
     
     parser.add_argument(
@@ -518,6 +547,8 @@ def main() -> None:
     )
     
     args = parser.parse_args()
+    
+    load_dotenv()
     
     # Setup logging
     log_level = "DEBUG" if args.verbose else "INFO"

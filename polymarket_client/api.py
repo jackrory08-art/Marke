@@ -787,6 +787,10 @@ class PolymarketClient(BasePolymarketClient):
             self._simulated_orders[order_id] = order
             return order
         
+        # Defence in depth: config validation already rejects live mode. The
+        # request below is an unsigned stub, so never send it.
+        raise RuntimeError("live trading is disabled in this build")
+        
         try:
             # TODO: Implement actual order placement
             # Would need to:

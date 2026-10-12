@@ -12,6 +12,14 @@ pyyaml>=6.0.1
 # Data validation (optional but recommended)
 pydantic>=2.5.0
 
+# Database, migrations, auth
+sqlalchemy>=2.0
+alembic>=1.13
+argon2-cffi>=23.1
+
+# AI verifier / analyst (imported lazily; only needed when ai.provider: gemini)
+google-genai>=1.0
+
 # Utilities
 python-dotenv>=1.0.0
 

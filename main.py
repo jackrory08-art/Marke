@@ -26,7 +26,7 @@ from core.arb_engine import ArbEngine, ArbConfig
 from core.execution import ExecutionEngine, ExecutionConfig
 from core.risk_manager import RiskManager, RiskConfig
 from core.portfolio import Portfolio
-from utils.config_loader import load_config, BotConfig
+from utils.config_loader import load_config, validate_config, BotConfig
 from utils.logging_utils import setup_logging, performance_logger
 
 
@@ -360,6 +360,13 @@ async def main_async(args: argparse.Namespace) -> None:
         config.mode.trading_mode = "live"
     elif args.dry_run:
         config.mode.trading_mode = "dry_run"
+    
+    # Re-validate: --live is rejected (live trading is disabled in this build)
+    try:
+        validate_config(config)
+    except Exception as e:
+        logger.error(f"{e}")
+        sys.exit(1)
     
     # Run backtest if requested
     if args.backtest:
