@@ -304,6 +304,12 @@ class MarketMatcher:
         # Optional callable that blocks while processing is paused. Matching runs in a
         # worker thread, so blocking here never stalls the web server.
         self.pause_gate: Optional[Callable[[], None]] = None
+        # Per-text caches: the same title is analysed once, not once per comparison.
+        self._norm_cache: dict[str, str] = {}
+        self._teams_cache: dict[str, list[str]] = {}
+        self._entities_cache: dict[str, set[str]] = {}
+        self._date_cache: dict[str, Optional[str]] = {}
+        self._token_cache: dict[str, frozenset] = {}
         
         # Build reverse lookup for team names
         self._team_lookup = {}
@@ -311,22 +317,34 @@ class MarketMatcher:
             self._team_lookup[full_name] = full_name
             for variant in variants:
                 self._team_lookup[variant.lower()] = full_name
+        self._team_keys_longest_first = sorted(self._team_lookup.keys(), key=len, reverse=True)
+    
+    @staticmethod
+    def _remember(cache: dict, key: str, value):
+        if len(cache) > 100_000:
+            cache.clear()
+        cache[key] = value
+        return value
     
     def normalize_text(self, text: str) -> str:
         """Normalize text for comparison."""
-        text = text.lower()
-        text = re.sub(r'[^\w\s]', ' ', text)
-        words = text.split()
-        words = [w for w in words if w not in self.NOISE_WORDS]
-        return ' '.join(words)
+        cached = self._norm_cache.get(text)
+        if cached is not None:
+            return cached
+        lowered = re.sub(r'[^\w\s]', ' ', text.lower())
+        words = [w for w in lowered.split() if w not in self.NOISE_WORDS]
+        return self._remember(self._norm_cache, text, ' '.join(words))
     
     def extract_teams(self, text: str) -> list[str]:
         """Extract team names from text."""
+        cached = self._teams_cache.get(text)
+        if cached is not None:
+            return cached
         text_lower = text.lower()
         found_teams = []
         
         # Check for team names (longest match first)
-        for team_key in sorted(self._team_lookup.keys(), key=len, reverse=True):
+        for team_key in self._team_keys_longest_first:
             if team_key in text_lower:
                 canonical = self._team_lookup[team_key]
                 if canonical not in found_teams:
@@ -334,10 +352,13 @@ class MarketMatcher:
                     # Remove from text to avoid double matches
                     text_lower = text_lower.replace(team_key, "")
         
-        return found_teams
+        return self._remember(self._teams_cache, text, found_teams)
     
     def extract_key_entities(self, text: str) -> set[str]:
         """Extract key entities (names, numbers, dates) from text."""
+        cached = self._entities_cache.get(text)
+        if cached is not None:
+            return cached
         entities = set()
         
         # Numbers and percentages
@@ -358,9 +379,14 @@ class MarketMatcher:
             if term in text.lower():
                 entities.add(term)
         
-        return entities
+        return self._remember(self._entities_cache, text, entities)
     
     def extract_date(self, text: str) -> Optional[str]:
+        if text in self._date_cache:
+            return self._date_cache[text]
+        return self._remember(self._date_cache, text, self._extract_date(text))
+    
+    def _extract_date(self, text: str) -> Optional[str]:
         """
         Extract date from text for event matching.
         
@@ -581,11 +607,31 @@ class MarketMatcher:
         
         return 'other'
     
+    # Words too generic to link two markets on their own
+    GENERIC_TOKENS = frozenset({
+        "yes", "no", "over", "under", "game", "games", "match", "will", "winner", "wins",
+        "than", "more", "less", "least", "before", "after", "during", "total", "points",
+        "season", "price", "above", "below", "between", "reach", "close", "end", "new",
+    })
+    MAX_CANDIDATES = 400          # most candidates compared per market
+    
+    def _tokens(self, title: str) -> frozenset:
+        """Informative words of a title (cached): what two matching markets must share."""
+        cached = self._token_cache.get(title)
+        if cached is not None:
+            return cached
+        words = {w for w in self.normalize_text(title).split()
+                 if len(w) >= 3 and w not in self.GENERIC_TOKENS}
+        # "Chiefs" and "Kansas City" are the same team: link titles by canonical team too
+        words.update("team:" + team for team in self.extract_teams(title))
+        return self._remember(self._token_cache, title, frozenset(words))
+    
     async def find_matches(
         self,
         polymarket_markets: list[Market],
         kalshi_markets: list,  # list[KalshiMarket]
         on_progress: callable = None,  # Callback for progress updates
+        on_match: Optional[Callable[[MarketPair], None]] = None,
     ) -> list[MarketPair]:
         """
         Find matching Polymarket/Kalshi markets using category-based matching.
@@ -594,33 +640,38 @@ class MarketMatcher:
             polymarket_markets: List of Polymarket markets
             kalshi_markets: List of Kalshi markets
             on_progress: Optional callback(checked, total, matches_found) for live updates
+            on_match: Optional callback(pair) as each pair is found (called from this thread)
             
         Returns:
             List of matched market pairs (each carries both markets' rules text)
         """
         refs_poly = [from_polymarket(m) for m in polymarket_markets if m.active]
         refs_kalshi = [from_kalshi(m) for m in kalshi_markets if m.is_active]
-        return await self.match_refs(refs_poly, refs_kalshi, on_progress=on_progress)
+        return await self.match_refs(refs_poly, refs_kalshi,
+                                     on_progress=on_progress, on_match=on_match)
     
     async def match_refs(
         self,
         refs_a: list[ComparableMarket],
         refs_b: list[ComparableMarket],
         on_progress: callable = None,
+        on_match: Optional[Callable[[MarketPair], None]] = None,
     ) -> list[MarketPair]:
         """Match two lists of markets from different platforms by title similarity.
         
         For each market in ``refs_a`` the best match in ``refs_b`` within the
-        same category is kept if it reaches ``min_similarity``. This only
-        *proposes* pairs; the LLM gate decides whether they are the same bet.
+        same category is kept if it reaches ``min_similarity``. Only markets that
+        share at least one informative word are compared, which keeps this fast
+        (an all-against-all comparison of thousands of markets takes tens of
+        minutes). This only *proposes* pairs; the LLM gate decides whether they
+        are the same bet.
         """
         import asyncio
+        from collections import Counter
         
         matches = []
         
-        # Group by category for faster matching
-        logger.info("Categorizing markets for faster matching...")
-        
+        # Group by category
         a_by_cat: dict[str, list] = {}
         for m in refs_a:
             a_by_cat.setdefault(self._categorize_market(m.title), []).append(m)
@@ -629,60 +680,56 @@ class MarketMatcher:
         for m in refs_b:
             b_by_cat.setdefault(self._categorize_market(m.title), []).append(m)
         
-        # Log category breakdown
         logger.info("=== CATEGORY BREAKDOWN ===")
-        for cat in set(list(a_by_cat.keys()) + list(b_by_cat.keys())):
+        for cat in sorted(set(a_by_cat) | set(b_by_cat)):
             logger.info(f"  {cat}: A={len(a_by_cat.get(cat, []))}, B={len(b_by_cat.get(cat, []))}")
-        
-        # Calculate total comparisons (only within categories)
-        total_comparisons = sum(
-            len(a_by_cat.get(cat, [])) * len(b_by_cat.get(cat, []))
-            for cat in set(list(a_by_cat.keys()) + list(b_by_cat.keys()))
-        )
-        
-        logger.info(f"Total comparisons (category-based): {total_comparisons:,}")
-        logger.info(f"(vs {len(refs_a) * len(refs_b):,} if matching all-to-all)")
-        
-        checked = 0
         
         # Match within each category (skip 'other' - too noisy)
         priority_categories = ['sports', 'politics', 'crypto', 'finance', 'entertainment', 'tech']
+        work = [(c, a_by_cat.get(c, []), b_by_cat.get(c, [])) for c in priority_categories]
+        work = [w for w in work if w[1] and w[2]]
+        total = sum(len(a) for _, a, _ in work)
+        checked = 0
+        compared = 0
         
-        for category in priority_categories:
-            cat_a = a_by_cat.get(category, [])
-            cat_b = b_by_cat.get(category, [])
-            
-            if not cat_a or not cat_b:
-                continue
-            
+        for category, cat_a, cat_b in work:
             logger.info(f"Matching {category}: {len(cat_a)} x {len(cat_b)}")
+            
+            # word -> positions of the markets in cat_b that contain it; very common
+            # words are dropped, they would link everything to everything
+            index: dict[str, list[int]] = {}
+            for pos, ref_b in enumerate(cat_b):
+                for word in self._tokens(ref_b.title):
+                    index.setdefault(word, []).append(pos)
+            common = max(25, int(0.04 * len(cat_b)))
+            index = {w: ps for w, ps in index.items() if len(ps) <= common}
             
             for ref_a in cat_a:
                 if self.pause_gate is not None:
                     self.pause_gate()
+                
+                shared: Counter = Counter()
+                for word in self._tokens(ref_a.title):
+                    for pos in index.get(word, ()):
+                        shared[pos] += 1
+                candidates = [pos for pos, _ in shared.most_common(self.MAX_CANDIDATES)]
+                
                 best_match = None
                 best_score = 0.0
-                
-                for ref_b in cat_b:
+                for pos in candidates:
+                    ref_b = cat_b[pos]
                     score = self.calculate_similarity(ref_a.title, ref_b.title)
-                    
+                    compared += 1
                     if score > best_score:
                         best_score = score
                         best_match = ref_b
-                    
-                    checked += 1
                 
-                # Yield VERY frequently to keep event loop responsive
-                if checked % 500 == 0:
-                    await asyncio.sleep(0.01)  # Small sleep to let web requests through
-                    pct = (checked / total_comparisons * 100) if total_comparisons > 0 else 0
-                    
-                    if checked % 5000 == 0:
-                        logger.info(f"Progress: {checked:,}/{total_comparisons:,} ({pct:.1f}%) - {len(matches)} matches")
-                    
+                checked += 1
+                if checked % 10 == 0:
+                    await asyncio.sleep(0)  # let the thread's loop breathe
                     if on_progress:
                         try:
-                            on_progress(checked, total_comparisons, len(matches))
+                            on_progress(checked, total, len(matches))
                         except Exception:
                             pass
                 
@@ -691,13 +738,28 @@ class MarketMatcher:
                     pair = MarketPair.from_refs(ref_a, best_match, best_score, category)
                     matches.append(pair)
                     self._matched_pairs[pair.pair_id] = pair
+                    if on_match is not None:
+                        try:
+                            on_match(pair)
+                        except Exception:
+                            logger.exception("on_match callback failed")
                     
                     logger.info(
                         f"MATCHED [{category}]: '{ref_a.title[:35]}...' <-> '{best_match.title[:35]}...' "
                         f"(score: {best_score:.2f})"
                     )
+            
+            logger.info(f"Matched {category}: {len(matches)} pairs so far "
+                        f"({checked}/{total} markets, {compared:,} comparisons)")
         
-        logger.info(f"=== MATCHING COMPLETE: {len(matches)} pairs found ===")
+        if on_progress:
+            try:
+                on_progress(total, total, len(matches))
+            except Exception:
+                pass
+        logger.info(f"=== MATCHING COMPLETE: {len(matches)} pairs found "
+                    f"({compared:,} comparisons instead of "
+                    f"{len(refs_a) * len(refs_b):,}) ===")
         return matches
     
     def get_cached_pairs(self) -> list[MarketPair]:

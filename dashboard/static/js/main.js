@@ -79,7 +79,9 @@ function renderMeta() {
   clear(meta).append(
     badge(mode === 'live' ? 'LIVE' : 'DRY RUN', 'accent'),
     ...(paused ? [badge('PAUSED', 'caveats')] : []),
-    ai.enabled ? badge(ai.mock ? 'AI MOCK' : 'AI ON', ai.mock ? 'caveats' : 'ok') : badge('AI OFF', 'neutral'),
+    ai.enabled
+      ? (ai.configured === false ? badge('AI NO KEY', 'bad') : badge(ai.mock ? 'AI MOCK' : 'AI ON', ai.mock ? 'caveats' : 'ok'))
+      : badge('AI OFF', 'neutral'),
     h('span', { class: 'small muted num', id: 'uptime' }, uptimeBase == null ? '' : `up ${duration(uptimeBase)}`),
     h('button', { type: 'button', class: paused ? 'primary' : null, id: 'pause-toggle', onclick: () => setPaused(!paused),
       'aria-pressed': paused ? 'true' : 'false',

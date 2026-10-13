@@ -9,6 +9,7 @@ API Documentation: https://docs.kalshi.com/getting_started/quick_start_market_da
 """
 
 import asyncio
+import re
 import logging
 from datetime import datetime
 from typing import Optional, AsyncIterator
@@ -23,6 +24,21 @@ from kalshi_client.models import (
 from polymarket_client.models import PriceLevel, OrderBook
 
 logger = logging.getLogger(__name__)
+
+
+def is_multivariate(data: dict) -> bool:
+    """True for Kalshi's multi-leg "combo" markets (titles like "yes Boston,no Dallas").
+
+    They make up most of Kalshi's open markets, can't be paired with a single
+    Polymarket market, and would only waste matching time and AI calls.
+    """
+    for key in ("ticker", "event_ticker"):
+        if str(data.get(key) or "").upper().startswith("KXMVE"):
+            return True
+    if data.get("mve_collection_ticker") or data.get("mve_selected_legs"):
+        return True
+    return bool(re.match(r"^(yes|no)\s", str(data.get("title") or ""), re.I)
+                and "," in str(data.get("title") or ""))
 
 
 class KalshiClient:
@@ -54,6 +70,7 @@ class KalshiClient:
         self.dry_run = dry_run
         self._client: Optional[httpx.AsyncClient] = None
         self._markets_cache: dict[str, KalshiMarket] = {}
+        self._mve_filter_supported = True  # ask Kalshi to leave out combo markets
         
     async def __aenter__(self) -> "KalshiClient":
         """Async context manager entry."""
@@ -195,12 +212,24 @@ class KalshiClient:
         if cursor:
             params["cursor"] = cursor
         
-        data = await self._get("/markets", params=params)
+        data = None
+        if self._mve_filter_supported:
+            try:
+                data = await self._get("/markets", params={**params, "mve_filter": "exclude"})
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (400, 422):
+                    raise
+                logger.warning("Kalshi rejected mve_filter; filtering combo markets locally")
+                self._mve_filter_supported = False
+        if data is None:
+            data = await self._get("/markets", params=params)
         if not data or "markets" not in data:
             return [], None
         
         markets = []
         for m in data["markets"]:
+            if is_multivariate(m):
+                continue
             market = self._parse_market(m)
             if market:
                 markets.append(market)
@@ -228,6 +257,8 @@ class KalshiClient:
         """
         all_markets = []
         cursor = None
+        pages = 0
+        max_pages = 400
         
         while len(all_markets) < max_markets:
             markets, next_cursor = await self.list_markets(
@@ -235,8 +266,11 @@ class KalshiClient:
                 limit=1000,
                 cursor=cursor,
             )
+            pages += 1
             
-            if not markets:
+            # A page can be empty after dropping combo markets; keep paging while
+            # there is a cursor (bounded, so a bad cursor can't loop forever)
+            if not markets and (not next_cursor or pages >= max_pages):
                 break
             
             all_markets.extend(markets)

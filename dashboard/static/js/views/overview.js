@@ -48,12 +48,15 @@ export function mount(root) {
             h('dt', null, 'Unverified'), h('dd', null, badge(num(pairs.unverified ?? 0), 'unverified')),
             h('dt', null, 'Dismissed'), h('dd', null, badge(num(pairs.dismissed ?? 0), 'dismissed')),
             h('dt', null, 'Actionable now'), h('dd', { class: 'num' },
-              num((cp.cross_opportunities || []).filter((o) => o.actionable).length)))),
+              num((cp.cross_opportunities || []).filter((o) => o.actionable).length)),
+            h('dt', null, 'Last scan'), h('dd', null, scanText(cp.last_scan)))),
         h('section', null,
           h('h2', null, 'AI verification'),
           h('dl', { class: 'facts' },
             h('dt', null, 'Status'), h('dd', null,
-              ai.enabled ? badge(ai.mock ? 'ON (MOCK)' : 'ON', ai.mock ? 'caveats' : 'ok') : badge('OFF', 'neutral')),
+              ai.enabled ? (ai.configured === false ? badge('NO API KEY', 'bad') : badge(ai.mock ? 'ON (MOCK)' : 'ON', ai.mock ? 'caveats' : 'ok')) : badge('OFF', 'neutral')),
+            ai.enabled && ai.configured === false ? h('dt', null, 'Fix') : null,
+            ai.enabled && ai.configured === false ? h('dd', null, 'Set GEMINI_API_KEY in your hosting variables. Until then no pair can be verified, so nothing is actionable.') : null,
             h('dt', null, 'Model'), h('dd', { class: 'mono small' }, `${ai.provider || '—'} / ${ai.model || '—'}`),
             h('dt', null, 'Calls today'), h('dd', { class: 'num' }, `${num(usage.calls_today)} of ${num(usage.call_budget)}`),
             h('dt', null, 'Cost today'), h('dd', { class: 'num' }, usd(usage.cost_today, 4)),
@@ -67,10 +70,16 @@ export function mount(root) {
         eventsList()));
   }
 
+  function scanText(scan) {
+    if (!scan) return 'No scan yet';
+    const ago = Math.max(0, Math.round(Date.now() / 1000 - scan.at));
+    return `${num(scan.pairs)} pairs, ${num(scan.priced ?? 0)} with live prices, ${num(scan.opportunities)} with an edge (${ago}s ago)`;
+  }
+
   function matchingText(cp) {
     if (cp.simulated) return 'Demo pairs (simulation)';
     if (!cp.enabled) return 'Cross-platform is off';
-    if (cp.matching_status === 'matching') return `${cp.matching_progress ?? 0}% (${num(cp.matching_checked)} of ${num(cp.matching_total)})`;
+    if (cp.matching_status === 'matching') return `${cp.matching_progress ?? 0}% (${num(cp.matching_checked)} of ${num(cp.matching_total)} markets)`;
     return cp.matching_status || 'idle';
   }
 
