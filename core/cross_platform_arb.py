@@ -317,7 +317,15 @@ class MarketMatcher:
             self._team_lookup[full_name] = full_name
             for variant in variants:
                 self._team_lookup[variant.lower()] = full_name
-        self._team_keys_longest_first = sorted(self._team_lookup.keys(), key=len, reverse=True)
+        # Whole-word matching only. Substring matching made "no" (Saints) fire inside
+        # "Nov", "min" inside "Minaur", and so on, so unrelated titles looked identical.
+        # Abbreviations of up to 3 letters ("KC", "SEA") count only when written in capitals.
+        long_keys = sorted((k for k in self._team_lookup if len(k) > 3), key=len, reverse=True)
+        short_keys = sorted((k for k in self._team_lookup if len(k) <= 3), key=len, reverse=True)
+        self._team_re = re.compile(
+            r"(?<![a-z0-9])(?:%s)(?![a-z0-9])" % "|".join(re.escape(k) for k in long_keys))
+        self._team_abbr_re = re.compile(
+            r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(re.escape(k.upper()) for k in short_keys))
     
     @staticmethod
     def _remember(cache: dict, key: str, value):
@@ -340,17 +348,15 @@ class MarketMatcher:
         cached = self._teams_cache.get(text)
         if cached is not None:
             return cached
-        text_lower = text.lower()
         found_teams = []
-        
-        # Check for team names (longest match first)
-        for team_key in self._team_keys_longest_first:
-            if team_key in text_lower:
-                canonical = self._team_lookup[team_key]
-                if canonical not in found_teams:
-                    found_teams.append(canonical)
-                    # Remove from text to avoid double matches
-                    text_lower = text_lower.replace(team_key, "")
+        for key in self._team_re.findall(text.lower()):
+            canonical = self._team_lookup[key]
+            if canonical not in found_teams:
+                found_teams.append(canonical)
+        for key in self._team_abbr_re.findall(text):
+            canonical = self._team_lookup[key.lower()]
+            if canonical not in found_teams:
+                found_teams.append(canonical)
         
         return self._remember(self._teams_cache, text, found_teams)
     
@@ -431,6 +437,17 @@ class MarketMatcher:
             return True  # If no dates, don't penalize
         return date1 == date2
     
+    _TOTAL_RE = re.compile(r"\b(?:o/u|over/under|over|under|total|totals)\b", re.I)
+    _SPREAD_RE = re.compile(r"\b(?:spread|handicap)\b|\([+-]\d+(?:\.\d)?\)", re.I)
+    
+    def _bet_kind(self, text: str) -> str:
+        """'total' (over/under), 'spread' or 'winner': what a sports market is about."""
+        if self._TOTAL_RE.search(text):
+            return "total"
+        if self._SPREAD_RE.search(text):
+            return "spread"
+        return "winner"
+    
     def is_sports_match(self, text1: str, text2: str) -> tuple[bool, float]:
         """
         Check if two texts refer to the same sports matchup.
@@ -447,6 +464,9 @@ class MarketMatcher:
             teams2_set = set(teams2[:2])
             
             if teams1_set == teams2_set:
+                # Same game, but "who wins", "total points" and "spread" are different bets
+                if self._bet_kind(text1) != self._bet_kind(text2):
+                    return False, 0.0
                 # Also check dates match
                 date1 = self.extract_date(text1)
                 date2 = self.extract_date(text2)
@@ -456,13 +476,7 @@ class MarketMatcher:
                 else:
                     return False, 0.3  # Same teams but different dates - likely different games
             
-            # Check if at least one team matches (and dates match)
-            overlap = teams1_set & teams2_set
-            if len(overlap) >= 1:
-                date1 = self.extract_date(text1)
-                date2 = self.extract_date(text2)
-                if self.dates_match(date1, date2):
-                    return True, 0.7 + (0.2 * len(overlap) / 2)
+            # One team in common is a different game (same team, different opponent)
         
         return False, 0.0
     
@@ -591,8 +605,8 @@ class MarketMatcher:
         if any(x in text_lower for x in sports_keywords):
             return 'sports'
         
-        # Check for team names
-        if any(x in text_lower for x in self._team_lookup.keys()):
+        # Check for team names (whole words, see extract_teams)
+        if self.extract_teams(text):
             return 'sports'
         
         # Entertainment

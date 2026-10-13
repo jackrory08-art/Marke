@@ -103,3 +103,8 @@ def test_pause_control_is_in_the_header_and_settings():
     main = (STATIC / "js" / "main.js").read_text()
     assert "mode.paused" in main and "Pause processing" in main and "PAUSED" in main
     assert "mode.paused" in (STATIC / "js" / "views" / "settings.js").read_text()
+
+
+def test_pairs_table_shows_why_a_pair_is_unverified():
+    js = (STATIC / "js" / "views" / "pairs.js").read_text()
+    assert "p.status === 'unverified'" in js and "REASON_TEXT[p.verdict.reason]" in js

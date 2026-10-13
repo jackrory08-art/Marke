@@ -199,3 +199,55 @@ async def test_last_scan_reports_how_many_pairs_had_live_prices(config, state):
     await scanner.scan_once()
     scan = state.cross_platform["last_scan"]
     assert scan["pairs"] == 2 and scan["priced"] == 1 and scan["opportunities"] == 0
+
+
+# ------------------------------------------------- false matches (screenshot)
+JUNK = [
+    ("Shanghai Rolex Masters: Alex de Minaur vs Karen Khachanov",
+     "Will Kenya and the US reach a critical minerals deal before Nov 1, 2026?"),
+    ("Will Harry Kane win the 2026 Ballon d'Or?", "Saga Ballooners wins"),
+    ("Jinan: Stefanos Sakellaridis vs Keegan Smith", "Millonarios wins by more than 2.5 goals?"),
+    ("Santa Cruz 2: Joaquin Aguilar vs Felipe Meligeni Alves", "Crevelaro / Felipe Silva wins"),
+    ("Wuhan Tennis Open: Yulia Putintseva vs Zeynep Sonmez", "Fontenel / Nishimura wins"),
+]
+
+
+@pytest.mark.parametrize("a,b", JUNK)
+def test_unrelated_titles_do_not_score_as_a_match(a, b):
+    """Team abbreviations such as 'no', 'min' and 'was' used to match inside ordinary words."""
+    assert MarketMatcher().calculate_similarity(a, b) < 0.6
+
+
+def test_team_abbreviations_only_count_as_whole_capitalised_words():
+    m = MarketMatcher()
+    assert m.extract_teams("Nov Minaur Khachanov was not here, no way") == []
+    assert set(m.extract_teams("KC @ SEA")) == {"kansas city chiefs", "seattle seahawks"}
+    assert set(m.extract_teams("Chiefs vs. Seahawks")) == {"kansas city chiefs", "seattle seahawks"}
+
+
+def test_ordinary_text_is_not_categorised_as_sports():
+    m = MarketMatcher()
+    assert m._categorize_market("Will Kenya and the US reach a critical minerals deal before Nov 1?") != "sports"
+    assert m._categorize_market("Chiefs vs. Seahawks") == "sports"
+
+
+def test_same_game_matches_across_team_aliases():
+    m = MarketMatcher()
+    assert m.calculate_similarity("Chiefs vs. Seahawks", "Kansas City at Seattle winner?") >= 0.9
+
+
+def test_a_totals_market_is_not_the_same_bet_as_a_winner_market():
+    m = MarketMatcher()
+    assert m.calculate_similarity("Chiefs vs. Seahawks: O/U 58.5", "Kansas City at Seattle winner?") < 0.6
+    assert m.calculate_similarity("Chiefs vs. Seahawks: O/U 58.5",
+                                  "Kansas City at Seattle: total points over 58.5") >= 0.9
+
+
+def test_one_shared_team_is_a_different_game():
+    m = MarketMatcher()
+    assert m.calculate_similarity("Chiefs vs. Seahawks", "Chiefs vs. Raiders") < 0.6
+
+
+def test_identical_titles_still_score_one():
+    t = "Will Raphaël Glucksmann win the 2027 French presidential election?"
+    assert MarketMatcher().calculate_similarity(t, t) == 1.0
