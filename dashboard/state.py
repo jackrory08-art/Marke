@@ -67,6 +67,7 @@ class DashboardState:
         self.ai = None  # AIServices, set by the runner
         self.scanner = None  # CrossPlatformScanner, set by the runner
         self.setting_hooks: dict = {}  # key -> async callable(value)
+        self.paused: bool = False  # processing stopped from the dashboard
         self.ai_budget: dict = {}
     
     def to_dict(self) -> dict:
@@ -86,6 +87,7 @@ class DashboardState:
             "cross_platform": self.cross_platform,  # Cross-platform arbitrage stats
             "ai": {**(self.ai.status() if self.ai else self.ai_status), "budget": self.ai_budget},
             "agent_state": self.agent_state,
+            "paused": self.paused,
             "pairs": self.pair_store.counts() if self.pair_store else {},
             "is_running": self.is_running,
             "mode": self.mode,
@@ -94,6 +96,18 @@ class DashboardState:
             "uptime_seconds": uptime,
         }
     
+    def set_paused(self, paused: bool) -> None:
+        """Record the pause switch and tell the UI what the agent is doing now."""
+        paused = bool(paused)
+        changed = paused != self.paused
+        self.paused = paused
+        if changed:
+            self.emit("agent_state", {
+                "state": "idle",
+                "detail": "Paused" if paused else "Resuming",
+                "progress": {"done": 0, "total": 0},
+            })
+
     def register(self, websocket: WebSocket, session_id: str) -> None:
         self._connections.append(websocket)
         self._socket_sessions[websocket] = session_id

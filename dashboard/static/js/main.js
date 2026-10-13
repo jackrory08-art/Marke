@@ -75,12 +75,32 @@ function renderMeta() {
   const ai = store.ai || {};
   const mode = store.state && store.state.mode;
   const theme = document.documentElement.dataset.theme || 'auto';
+  const paused = !!(store.state && store.state.paused);
   clear(meta).append(
     badge(mode === 'live' ? 'LIVE' : 'DRY RUN', 'accent'),
+    ...(paused ? [badge('PAUSED', 'caveats')] : []),
     ai.enabled ? badge(ai.mock ? 'AI MOCK' : 'AI ON', ai.mock ? 'caveats' : 'ok') : badge('AI OFF', 'neutral'),
     h('span', { class: 'small muted num', id: 'uptime' }, uptimeBase == null ? '' : `up ${duration(uptimeBase)}`),
+    h('button', { type: 'button', class: paused ? 'primary' : null, id: 'pause-toggle', onclick: () => setPaused(!paused),
+      'aria-pressed': paused ? 'true' : 'false',
+      title: paused ? 'Resume scanning, matching and AI checks' : 'Stop scanning, matching and AI checks' },
+      paused ? 'Resume processing' : 'Pause processing'),
     h('button', { type: 'button', onclick: cycleTheme, 'aria-label': `Theme: ${theme}. Change theme` }, `Theme: ${theme}`),
     h('button', { type: 'button', onclick: logout }, 'Sign out'));
+}
+
+async function setPaused(next) {
+  const btn = document.getElementById('pause-toggle');
+  if (btn) btn.disabled = true;
+  try {
+    await api.patch('/api/settings', { 'mode.paused': next });
+    if (store.state) store.state.paused = next;
+    pendingLine = describeAgent();
+    statusLine.textContent = pendingLine; lastLine = pendingLine;
+  } catch (e) {
+    statusLine.textContent = `Could not ${next ? 'pause' : 'resume'}: ${e.message}`;
+  }
+  renderMeta();
 }
 
 async function logout() {
@@ -93,6 +113,7 @@ let pendingLine = '';
 let lastLine = '';
 function describeAgent() {
   if (store.connection !== 'open') return store.connection === 'connecting' ? 'Connecting…' : 'Offline. Reconnecting…';
+  if (store.state && store.state.paused) return 'Paused. Scanning, matching and AI checks are stopped.';
   const a = store.agent || {};
   const p = a.progress || {};
   const base = a.detail || ({ idle: 'Idle', scanning: 'Scanning', verifying: 'Verifying', analysing: 'Analysing', found: 'Found one', error: 'Error' }[a.state] || 'Idle');

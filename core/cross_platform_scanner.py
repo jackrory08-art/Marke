@@ -50,6 +50,10 @@ class CrossPlatformScanner:
         self._last_scanned: dict[str, float] = {}
         self._running = False
 
+    @property
+    def paused(self) -> bool:
+        return self.config is not None and bool(getattr(self.config.mode, "paused", False))
+
     # ----------------------------------------------------------- selection
     def _platform_enabled(self, platform: str) -> bool:
         if platform not in self.fetchers:
@@ -204,7 +208,7 @@ class CrossPlatformScanner:
         self._running = True
         while self._running:
             try:
-                if self.store.all():
+                if self.store.all() and not self.paused:
                     await self.scan_once()
             except asyncio.CancelledError:
                 raise

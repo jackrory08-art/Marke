@@ -36,6 +36,7 @@ class VerificationQueue:
         self._batch_done = 0
         self._force: set[str] = set()
         self._retry_interval_s = retry_interval_s
+        self.pause_check: Optional[Callable[[], bool]] = None  # True while processing is paused
 
     # ------------------------------------------------------------- control
     def start(self) -> None:
@@ -94,6 +95,8 @@ class VerificationQueue:
     async def _worker(self) -> None:
         while True:
             _prio, _sim, _n, pair_id = await self._queue.get()
+            while self.pause_check is not None and self.pause_check():
+                await asyncio.sleep(1.0)
             try:
                 await self._process(pair_id)
             except asyncio.CancelledError:

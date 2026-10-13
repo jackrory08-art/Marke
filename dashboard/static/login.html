@@ -3,22 +3,47 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in</title>
-  <link rel="icon" href="data:,">
+  <meta name="color-scheme" content="light dark">
+  <title>Sign in · Aerithius</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M10 54 32 10 54 54M20 40h24' fill='none' stroke='%23E2803F' stroke-width='6' stroke-linejoin='miter'/%3E%3C/svg%3E">
+  <script src="/static/login.theme.js"></script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/base.css">
   <link rel="stylesheet" href="/static/css/login.css">
 </head>
 <body>
   <main class="login">
-    <h1>Marke</h1>
-    <p class="sub">Sign in to the dashboard</p>
-    <form id="loginForm" autocomplete="on">
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" autocomplete="username" required autofocus>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <p id="error" class="error" role="alert" hidden></p>
-      <button id="submit" type="submit">Sign in</button>
-    </form>
+    <header class="brand-block">
+      <svg class="logo" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="logo-title">
+        <title id="logo-title">Aerithius</title>
+        <path class="logo-ground" d="M6 58H58"/>
+        <path class="logo-peak" d="M10 54L32 10L54 54"/>
+        <path class="logo-bar" d="M20 40H44"/>
+      </svg>
+      <p class="wordmark">Aerithius</p>
+      <p class="product">Marke &middot; market arbitrage dashboard</p>
+    </header>
+
+    <section class="panel" aria-labelledby="signin-title">
+      <h1 id="signin-title">Sign in</h1>
+      <form id="loginForm" autocomplete="on">
+        <div class="field">
+          <label class="label" for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+        </div>
+        <div class="field">
+          <label class="label" for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <p id="error" class="error" role="alert" hidden></p>
+        <button id="submit" class="primary" type="submit">Sign in</button>
+      </form>
+    </section>
+
+    <footer class="login-foot">
+      <span class="badge accent">DRY RUN</span>
+      <p class="small muted">Advisory tool. It never places orders.</p>
+    </footer>
   </main>
   <script src="/static/login.js"></script>
 </body>

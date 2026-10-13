@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Optional
+from typing import Callable, Optional
 
 from core.fees import FeeModel, PredictItFees, top_of_book_size, walk_book
 from core.market_ref import ComparableMarket, from_kalshi, from_polymarket
@@ -301,6 +301,9 @@ class MarketMatcher:
         """
         self.min_similarity = min_similarity
         self._matched_pairs: dict[str, MarketPair] = {}
+        # Optional callable that blocks while processing is paused. Matching runs in a
+        # worker thread, so blocking here never stalls the web server.
+        self.pause_gate: Optional[Callable[[], None]] = None
         
         # Build reverse lookup for team names
         self._team_lookup = {}
@@ -655,6 +658,8 @@ class MarketMatcher:
             logger.info(f"Matching {category}: {len(cat_a)} x {len(cat_b)}")
             
             for ref_a in cat_a:
+                if self.pause_gate is not None:
+                    self.pause_gate()
                 best_match = None
                 best_score = 0.0
                 

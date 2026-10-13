@@ -103,6 +103,9 @@ class TradingBotWithDashboard:
         # Database (users, sessions, verdicts, history) and persisted UI settings
         self.db = init_database(self.config.database.url, self.config.database.auto_migrate)
         apply_overrides(self.config, self.db)
+        dashboard_state.paused = bool(self.config.mode.paused)
+        if dashboard_state.paused:
+            logger.info("Processing is PAUSED (resume it from the dashboard)")
         
         # Initialize Polymarket API client
         self.client = PolymarketClient(
@@ -247,7 +250,7 @@ class TradingBotWithDashboard:
     
     def _on_market_update(self, market_id: str, market_state) -> None:
         """Handle market updates."""
-        if not self._running:
+        if not self._running or self.config.mode.paused:
             return
         
         # Check risk limits
@@ -282,6 +285,8 @@ class TradingBotWithDashboard:
         while self._running:
             try:
                 await asyncio.sleep(2.0)
+                if self.config.mode.paused:
+                    continue
                 
                 orders = self.execution_engine.get_open_orders()
                 for order in orders:
@@ -419,6 +424,8 @@ class TradingBotWithDashboard:
         dashboard_state.setting_hooks["predictit.enabled"] = on_predictit_toggled
         dashboard_state.setting_hooks["ai.enabled"] = (
             lambda enabled: self.ai.on_enabled_changed(enabled, self.scanner))
+        self.ai.queue.pause_check = lambda: self.config.mode.paused
+        self.market_matcher.pause_gate = self._pause_gate
         self.ai.queue.start()
         self._scan_task = asyncio.create_task(
             self.scanner.run(self.config.mode.scan_interval_s))
@@ -426,6 +433,12 @@ class TradingBotWithDashboard:
             "Cross-platform gate: AI %s (provider=%s, model=%s)",
             "ON" if self.config.ai.enabled else "OFF",
             self.ai.provider.name, self.ai.provider.model)
+    
+    def _pause_gate(self) -> None:
+        """Block the matching worker thread while processing is paused."""
+        import time
+        while self.config.mode.paused and self._running:
+            time.sleep(0.5)
     
     async def _fetch_polymarket_book(self, market_id: str):
         state = self.data_feed.get_market_state(market_id) if self.data_feed else None
@@ -449,6 +462,9 @@ class TradingBotWithDashboard:
         """Poll PredictIt, and match its contracts against Polymarket and Kalshi."""
         polls = 0
         while self._running:
+            if self.config.mode.paused:
+                await asyncio.sleep(2.0)
+                continue
             try:
                 markets = await self.predictit.get_markets()
                 dashboard_state.cross_platform["predictit_markets"] = len(markets)
