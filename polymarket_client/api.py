@@ -246,13 +246,24 @@ class PolymarketClient(BasePolymarketClient):
                 params["limit"] = limit
                 params["offset"] = offset
                 
-                data = await self._request(
-                    "GET", 
-                    "/markets",
-                    params=params,
-                    base_url=self.gamma_url,
-                )
-                
+                try:
+                    data = await self._request(
+                        "GET",
+                        "/markets",
+                        params=params,
+                        base_url=self.gamma_url,
+                    )
+                except httpx.HTTPStatusError as e:
+                    # Gamma rejects offsets past its pagination ceiling with 422;
+                    # that is the end of the list, not a failure.
+                    if e.response.status_code == 422 and all_markets:
+                        logger.info(
+                            f"Gamma pagination ended at offset={offset} (HTTP 422); "
+                            f"keeping {len(all_markets)} markets"
+                        )
+                        break
+                    raise
+
                 if not data:
                     break
                 
