@@ -9,6 +9,7 @@ are not scanned.
 import asyncio
 import logging
 import time
+from collections import Counter
 from typing import Awaitable, Callable, Optional
 
 from app import repo
@@ -19,6 +20,13 @@ from polymarket_client.models import OrderBook
 logger = logging.getLogger(__name__)
 
 BookFetcher = Callable[[str], Awaitable[Optional[OrderBook]]]
+_PLATFORM_NAMES = {"polymarket": "Polymarket", "kalshi": "Kalshi", "predictit": "PredictIt"}
+
+
+def platform_name(platform: str) -> str:
+    return _PLATFORM_NAMES.get(platform, platform)
+
+
 _CLASS_RANK = {"verified": 0, "pending": 1, "unverified": 2}
 
 
@@ -50,6 +58,7 @@ class CrossPlatformScanner:
         self._last_scanned: dict[str, float] = {}
         self._running = False
         self._priced = 0          # pairs with live prices on both sides in the current scan
+        self._unpriced_reasons: Counter = Counter()
 
     @property
     def paused(self) -> bool:
@@ -77,6 +86,15 @@ class CrossPlatformScanner:
                                   self._last_scanned.get(p.pair_id, 0.0)))
         return pairs[: self.max_pairs]
 
+    def _note(self, pair: MarketPair, note: str) -> None:
+        """Remember why a pair could not be priced; log it when it changes."""
+        if note != pair.scan_note:
+            if note and pair.verification_status == "verified":
+                logger.info("Verified pair has no usable prices (%s): %s", note, pair.title_a[:60])
+            pair.scan_note = note
+        if note:
+            self._unpriced_reasons[note] += 1
+
     # ---------------------------------------------------------------- scan
     async def scan_once(self) -> list[CrossPlatformOpportunity]:
         pairs = self.candidates()
@@ -85,6 +103,7 @@ class CrossPlatformScanner:
                                   "progress": {"done": 0, "total": total}})
         found: list[CrossPlatformOpportunity] = []
         self._priced = 0
+        self._unpriced_reasons = Counter()
         results = await asyncio.gather(*(self._scan_pair(p) for p in pairs))
         for opp in results:
             if opp is not None:
@@ -92,6 +111,7 @@ class CrossPlatformScanner:
         self._publish()
         self.state.cross_platform["last_scan"] = {
             "pairs": total, "priced": self._priced, "opportunities": len(found),
+            "why_unpriced": [r for r, _ in self._unpriced_reasons.most_common(2)],
             "at": time.time()}
         if self.queue is None or self.queue.pending_count() == 0:
             actionable = [o for o in found if o.actionable]
@@ -106,17 +126,24 @@ class CrossPlatformScanner:
 
     async def _scan_pair(self, pair: MarketPair) -> Optional[CrossPlatformOpportunity]:
         self._last_scanned[pair.pair_id] = time.monotonic()
-        try:
-            book_a, book_b = await asyncio.gather(
-                self.fetchers[pair.platform_a](pair.market_a_id),
-                self.fetchers[pair.platform_b](pair.market_b_id))
-        except Exception as e:
-            logger.debug("Book fetch failed for %s: %s", pair.pair_id, e)
-            return None
-        if book_a is None or book_b is None:
+        results = await asyncio.gather(
+            self.fetchers[pair.platform_a](pair.market_a_id),
+            self.fetchers[pair.platform_b](pair.market_b_id), return_exceptions=True)
+        problems = []
+        for platform, book in zip((pair.platform_a, pair.platform_b), results):
+            if isinstance(book, Exception):
+                problems.append(f"{platform_name(platform)}: could not fetch ({type(book).__name__})")
+            elif book is None:
+                problems.append(f"{platform_name(platform)}: no order book")
+            elif not (book.best_bid_yes and book.best_ask_yes):
+                side = "bids" if not book.best_bid_yes else "asks"
+                problems.append(f"{platform_name(platform)}: no {side} yet (nobody is quoting)")
+        self._note(pair, "; ".join(problems))
+        if problems:
             self._drop(pair.pair_id)
             pair.live_edge = False
             return None
+        book_a, book_b = results
 
         self._priced += 1
         opp = self.engine.check_pair(pair, book_a, book_b)

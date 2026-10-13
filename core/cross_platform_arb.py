@@ -56,6 +56,7 @@ class MarketPair:
     verification: dict = field(default_factory=dict)
     dismissed: bool = False
     live_edge: bool = False  # last scan found a raw edge (raises verification priority)
+    scan_note: str = ""      # why the last scan could not price this pair (empty = priced)
     
     # Timestamps
     matched_at: datetime = field(default_factory=datetime.utcnow)

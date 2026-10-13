@@ -105,6 +105,7 @@ def pair_to_public(pair: MarketPair) -> dict:
         "verification_status": pair.verification_status,
         "dismissed": pair.dismissed,
         "live_edge": pair.live_edge,
+        "scan_note": pair.scan_note,
         "verdict": pair.verification or None,
         "refs": [r.to_public() for r in (pair.ref_a, pair.ref_b) if r is not None],
     }

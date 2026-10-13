@@ -251,3 +251,115 @@ def test_one_shared_team_is_a_different_game():
 def test_identical_titles_still_score_one():
     t = "Will Raphaël Glucksmann win the 2027 French presidential election?"
     assert MarketMatcher().calculate_similarity(t, t) == 1.0
+
+
+# ------------------------------------------------------ Kalshi order book shapes
+async def kalshi_book(payload):
+    client = KalshiClient()
+
+    async def fake_get(endpoint, params=None):
+        return payload
+    client._get = fake_get
+    return await client.get_orderbook("KXTEST-1")
+
+
+async def test_kalshi_book_legacy_cents_format():
+    book = await kalshi_book({"orderbook": {"yes": [[40, 100], [42, 50]], "no": [[55, 80]]}})
+    assert [(l.price, l.size) for l in book.yes_bids] == [(0.42, 50.0), (0.40, 100.0)]
+    assert [(l.price, l.size) for l in book.no_bids] == [(0.55, 80.0)]
+
+
+async def test_kalshi_book_fixed_point_dollar_format():
+    book = await kalshi_book({"orderbook_fp": {
+        "yes_dollars": [["0.4000", "100.00"], ["0.4200", "50.00"]], "no_dollars": [["0.5500", "80.00"]]}})
+    assert [(l.price, l.size) for l in book.yes_bids] == [(0.42, 50.0), (0.40, 100.0)]
+    assert [l.price for l in book.no_bids] == [0.55]
+
+
+async def test_kalshi_book_prefers_fixed_point_when_both_are_present():
+    book = await kalshi_book({"orderbook": {"yes": [[10, 1]], "no": [[20, 1]]},
+                              "orderbook_fp": {"yes_dollars": [["0.4200", "5.00"]], "no_dollars": [["0.5500", "5.00"]]}})
+    assert book.yes_bids[0].price == 0.42 and book.no_bids[0].price == 0.55
+
+
+@pytest.mark.parametrize("payload", [
+    {"orderbook": {"yes": None, "no": None}},
+    {"orderbook": {}}, {"orderbook": None}, {"orderbook_fp": {"yes_dollars": None, "no_dollars": None}},
+])
+async def test_kalshi_empty_or_null_books_are_empty_not_errors(payload):
+    book = await kalshi_book(payload)
+    assert book is not None and book.yes_bids == [] and book.no_bids == []
+
+
+async def test_kalshi_unknown_response_is_no_book_and_junk_levels_are_skipped():
+    assert await kalshi_book({"something": "else"}) is None
+    assert await kalshi_book({}) is None
+    book = await kalshi_book({"orderbook": {"yes": [[0, 5], [101, 5], ["x", 1], [40, 0], [40], [45, 10]]}})
+    assert [(l.price, l.size) for l in book.yes_bids] == [(0.45, 10.0)]
+
+
+async def test_kalshi_book_converts_to_a_two_sided_unified_book():
+    book = await kalshi_book({"orderbook_fp": {"yes_dollars": [["0.4000", "10"]], "no_dollars": [["0.5500", "10"]]}})
+    unified = book.to_unified_orderbook()
+    assert unified.best_bid_yes == 0.40 and round(unified.best_ask_yes, 2) == 0.45
+
+
+# ------------------------------------------------- why a pair has no live prices
+async def scan_with(config, state, fetch_a, fetch_b):
+    from core.cross_platform_arb import CrossPlatformArbEngine
+    from core.cross_platform_scanner import CrossPlatformScanner
+    store = PairStore()
+    pair = make_pair()
+    store.add_many([pair])
+    scanner = CrossPlatformScanner(CrossPlatformArbEngine(min_edge=0.02), store,
+                                   {"polymarket": fetch_a, "kalshi": fetch_b}, state, config=config)
+    await scanner.scan_once()
+    return pair, state.cross_platform["last_scan"]
+
+
+async def test_scan_says_which_platform_has_no_order_book(config, state):
+    from tests.helpers import make_book
+
+    async def poly(_): return make_book(0.40, 0.42)
+
+    async def kalshi(_): return None
+    pair, scan = await scan_with(config, state, poly, kalshi)
+    assert pair.scan_note == "Kalshi: no order book"
+    assert scan["priced"] == 0 and scan["why_unpriced"] == ["Kalshi: no order book"]
+
+
+async def test_scan_says_when_a_fetch_fails(config, state):
+    from tests.helpers import make_book
+
+    async def poly(_): raise TimeoutError("slow")
+
+    async def kalshi(_): return make_book(0.40, 0.42)
+    pair, scan = await scan_with(config, state, poly, kalshi)
+    assert pair.scan_note == "Polymarket: could not fetch (TimeoutError)" and scan["priced"] == 0
+
+
+async def test_a_one_sided_book_is_not_counted_as_priced(config, state):
+    from polymarket_client.models import OrderBookSide
+    from tests.helpers import make_book
+
+    async def poly(_): return make_book(0.40, 0.42)
+
+    async def kalshi(_):
+        book = make_book(0.40, 0.45)
+        book.yes.bids = OrderBookSide([])                  # asks only, nobody is bidding
+        return book
+    pair, scan = await scan_with(config, state, poly, kalshi)
+    assert "Kalshi: no bids yet" in pair.scan_note and scan["priced"] == 0
+
+
+async def test_priced_pairs_have_an_empty_note_and_it_is_public(config, state):
+    from core.pair_store import pair_to_public
+    from tests.helpers import make_book
+
+    async def poly(_): return make_book(0.40, 0.42)
+
+    async def kalshi(_): return make_book(0.40, 0.42)
+    pair, scan = await scan_with(config, state, poly, kalshi)
+    assert pair.scan_note == "" and scan["priced"] == 1 and scan["why_unpriced"] == []
+    pair.scan_note = "Kalshi: no order book"
+    assert pair_to_public(pair)["scan_note"] == "Kalshi: no order book"
