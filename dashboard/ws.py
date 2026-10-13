@@ -27,11 +27,16 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket.headers.get("origin"), None, websocket.headers.get("host"),
         config.server.allowed_origins,
     ):
+        logger.warning(
+            "WebSocket rejected (origin): origin=%r host=%r",
+            websocket.headers.get("origin"), websocket.headers.get("host"),
+        )
         await websocket.close(code=4403)
         return
     token = parse_cookie(websocket.headers.get("cookie"))
     info = await run_in_threadpool(auth.validate, token)
     if info is None:
+        logger.warning("WebSocket rejected (no valid session cookie)")
         await websocket.close(code=4401)
         return
 
