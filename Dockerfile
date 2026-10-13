@@ -18,7 +18,7 @@ COPY --chown=marke:marke . .
 
 USER marke
 ENV DATABASE_URL=sqlite:////data/marke.db
-VOLUME ["/data"]
+# /data is mounted as a volume by compose / the host (no VOLUME instruction: Railway rejects it)
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \

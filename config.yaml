@@ -125,7 +125,7 @@ server:
   session_idle_minutes: 120
   session_absolute_hours: 12
   allowed_origins: []              # extra Origins allowed for state-changing requests
-  allowed_hosts: ["127.0.0.1", "localhost"]
+  allowed_hosts: ["127.0.0.1", "localhost", "*.up.railway.app"]
   hsts: false                      # enable when served over HTTPS
 
 database:
