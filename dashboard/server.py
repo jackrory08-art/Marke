@@ -73,6 +73,7 @@ def create_app(
     app.state.auth = AuthService(db, config.server, clock=clock)
     app.state.dashboard_state = state or dashboard_state
     app.state.ws_heartbeat_s = 30.0
+    app.state.dashboard_state.paused = bool(getattr(config.mode, "paused", False))
 
     if app.state.dashboard_state.log_buffer is None:
         handler = RingBufferHandler()

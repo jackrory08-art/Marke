@@ -36,7 +36,7 @@ from core.risk_manager import RiskManager, RiskConfig
 from core.portfolio import Portfolio
 from core.cross_platform_arb import CrossPlatformArbEngine, MarketMatcher
 from core.cross_platform_scanner import CrossPlatformScanner
-from core.pair_store import PairStore
+from core.pair_store import PairInbox, PairStore
 from core.market_ref import from_kalshi, from_polymarket
 from predictit_client.api import build_predictit_client
 from app import repo
@@ -103,6 +103,9 @@ class TradingBotWithDashboard:
         # Database (users, sessions, verdicts, history) and persisted UI settings
         self.db = init_database(self.config.database.url, self.config.database.auto_migrate)
         apply_overrides(self.config, self.db)
+        dashboard_state.paused = bool(self.config.mode.paused)
+        if dashboard_state.paused:
+            logger.info("Processing is PAUSED (resume it from the dashboard)")
         
         # Initialize Polymarket API client
         self.client = PolymarketClient(
@@ -247,7 +250,7 @@ class TradingBotWithDashboard:
     
     def _on_market_update(self, market_id: str, market_state) -> None:
         """Handle market updates."""
-        if not self._running:
+        if not self._running or self.config.mode.paused:
             return
         
         # Check risk limits
@@ -282,6 +285,8 @@ class TradingBotWithDashboard:
         while self._running:
             try:
                 await asyncio.sleep(2.0)
+                if self.config.mode.paused:
+                    continue
                 
                 orders = self.execution_engine.get_open_orders()
                 for order in orders:
@@ -324,7 +329,7 @@ class TradingBotWithDashboard:
         
         self._kalshi_markets = await self.kalshi_client.list_all_markets(
             status="open",
-            max_markets=5000,
+            max_markets=10000,
             on_progress=on_kalshi_progress,
         )
         logger.info(f"Loaded {len(self._kalshi_markets)} Kalshi markets")
@@ -419,6 +424,8 @@ class TradingBotWithDashboard:
         dashboard_state.setting_hooks["predictit.enabled"] = on_predictit_toggled
         dashboard_state.setting_hooks["ai.enabled"] = (
             lambda enabled: self.ai.on_enabled_changed(enabled, self.scanner))
+        self.ai.queue.pause_check = lambda: self.config.mode.paused
+        self.market_matcher.pause_gate = self._pause_gate
         self.ai.queue.start()
         self._scan_task = asyncio.create_task(
             self.scanner.run(self.config.mode.scan_interval_s))
@@ -426,10 +433,44 @@ class TradingBotWithDashboard:
             "Cross-platform gate: AI %s (provider=%s, model=%s)",
             "ON" if self.config.ai.enabled else "OFF",
             self.ai.provider.name, self.ai.provider.model)
+        if self.config.ai.enabled and not self.ai.configured():
+            logger.warning(
+                "AI verification is ON but GEMINI_API_KEY is not set: no pair can be "
+                "verified, so nothing will ever be marked actionable. Add the key as an "
+                "environment variable, or turn AI verification off in Settings.")
+    
+    def _flush_pairs(self, inbox: PairInbox) -> int:
+        """Move pairs found by the matching thread into the store and the verification queue."""
+        pairs = inbox.drain()
+        if not pairs:
+            return 0
+        new = self.pair_store.add_many(pairs)
+        if new and self.ai is not None:
+            self.ai.queue.enqueue_pending()
+        dashboard_state.cross_platform["matched_pairs"] = len(self.pair_store.all())
+        if new:
+            logger.info("%d new pairs queued for verification (%d total)",
+                        len(new), len(self.pair_store.all()))
+        return len(new)
+    
+    def _pause_gate(self) -> None:
+        """Block the matching worker thread while processing is paused."""
+        import time
+        while self.config.mode.paused and self._running:
+            time.sleep(0.5)
     
     async def _fetch_polymarket_book(self, market_id: str):
         state = self.data_feed.get_market_state(market_id) if self.data_feed else None
-        return state.order_book if state else None
+        book = state.order_book if state else None
+        if book is not None and book.best_ask_yes and book.best_bid_yes:
+            return book
+        # The live stream rotates through ~2000 markets, so this one may not have
+        # been fetched yet: ask for its book directly instead of skipping the pair.
+        try:
+            return await self.client.get_orderbook(market_id)
+        except Exception as e:
+            logger.debug("On-demand Polymarket book failed for %s: %s", market_id, e)
+            return book
     
     async def _fetch_predictit_book(self, contract_key: str):
         return await self.predictit.fetch_orderbook(contract_key) if self.predictit else None
@@ -449,6 +490,9 @@ class TradingBotWithDashboard:
         """Poll PredictIt, and match its contracts against Polymarket and Kalshi."""
         polls = 0
         while self._running:
+            if self.config.mode.paused:
+                await asyncio.sleep(2.0)
+                continue
             try:
                 markets = await self.predictit.get_markets()
                 dashboard_state.cross_platform["predictit_markets"] = len(markets)
@@ -509,6 +553,8 @@ class TradingBotWithDashboard:
             # Run matching in thread pool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            # Pairs go to verification and scanning as they are found, not after the whole run
+            inbox = PairInbox()
             
             def run_matching_sync():
                 """Synchronous matching that runs in thread."""
@@ -519,6 +565,7 @@ class TradingBotWithDashboard:
                 
                 try:
                     def on_progress(checked, total, matches_found):
+                        dashboard_state.cross_platform["matching_total"] = total
                         dashboard_state.cross_platform["matching_checked"] = checked
                         dashboard_state.cross_platform["matching_progress"] = int(checked / total * 100) if total > 0 else 0
                         dashboard_state.cross_platform["matched_pairs"] = matches_found
@@ -541,13 +588,24 @@ class TradingBotWithDashboard:
                             polymarket_markets,
                             self._kalshi_markets,
                             on_progress=on_progress,
+                            on_match=inbox.put,
                         )
                     )
                     return result
                 finally:
                     new_loop.close()
             
-            self._matched_pairs = await loop.run_in_executor(executor, run_matching_sync)
+            async def flush_while_matching():
+                while True:
+                    await asyncio.sleep(3.0)
+                    self._flush_pairs(inbox)
+            
+            flusher = asyncio.create_task(flush_while_matching())
+            try:
+                self._matched_pairs = await loop.run_in_executor(executor, run_matching_sync)
+            finally:
+                flusher.cancel()
+                self._flush_pairs(inbox)
             
             dashboard_state.cross_platform["matching_status"] = "complete"
             dashboard_state.cross_platform["matching_progress"] = 100

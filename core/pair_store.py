@@ -108,3 +108,33 @@ def pair_to_public(pair: MarketPair) -> dict:
         "verdict": pair.verification or None,
         "refs": [r.to_public() for r in (pair.ref_a, pair.ref_b) if r is not None],
     }
+
+
+class PairInbox:
+    """Hands pairs from the matching worker thread to the event loop.
+
+    The matcher runs in a thread and finds pairs one by one. It ``put``s each
+    one here; a coroutine on the event loop ``drain``s the inbox every few
+    seconds and adds them to the store, so verification and scanning start long
+    before the whole matching run finishes. ``deque`` appends and pops are
+    thread-safe, so no lock is needed.
+    """
+
+    def __init__(self):
+        from collections import deque
+        self._items = deque()
+
+    def put(self, pair: MarketPair) -> None:
+        self._items.append(pair)
+
+    def drain(self) -> list[MarketPair]:
+        out = []
+        while self._items:
+            try:
+                out.append(self._items.popleft())
+            except IndexError:  # drained by someone else between the check and the pop
+                break
+        return out
+
+    def __len__(self) -> int:
+        return len(self._items)

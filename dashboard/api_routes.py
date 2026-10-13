@@ -244,6 +244,8 @@ async def patch_settings(
                                detail={"key": key, "old": old[key], "new": value})
     await run_in_threadpool(persist)
 
+    if "mode.paused" in coerced:
+        state.set_paused(coerced["mode.paused"])
     for key, value in coerced.items():
         state.emit("config_changed", {"key": key, "value": value, "by": user.username})
         hook = state.setting_hooks.get(key)

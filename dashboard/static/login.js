@@ -9,6 +9,7 @@
     ev.preventDefault();
     errorEl.hidden = true;
     submit.disabled = true;
+    submit.textContent = 'Signing in\u2026';
     fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -27,9 +28,11 @@
       }
       form.password.value = '';
       submit.disabled = false;
+      submit.textContent = 'Sign in';
     }).catch(function () {
       showError('Could not reach the server.');
       submit.disabled = false;
+      submit.textContent = 'Sign in';
     });
   });
 })();

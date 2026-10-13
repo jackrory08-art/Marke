@@ -138,6 +138,9 @@ class DataFeed:
             logger.error(f"Failed to fetch markets: {e}")
             raise
     
+    def _paused(self) -> bool:
+        return self.config is not None and bool(getattr(self.config.mode, "paused", False))
+
     async def _stream_orderbooks(self) -> None:
         """Stream order book updates."""
         # Use simulation for demo/screenshots, real data for production
@@ -149,6 +152,9 @@ class DataFeed:
                 async for market_id, orderbook in self.client.stream_orderbook(self.market_ids, use_simulation=use_simulation):
                     if not self._running:
                         break
+                    # Not consuming the stream also stops the polling behind it
+                    while self._paused() and self._running:
+                        await asyncio.sleep(1.0)
                     
                     self._order_books[market_id] = orderbook
                     self._last_update[market_id] = datetime.utcnow()

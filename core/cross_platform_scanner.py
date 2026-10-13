@@ -49,6 +49,11 @@ class CrossPlatformScanner:
         self._objects: dict[str, CrossPlatformOpportunity] = {}
         self._last_scanned: dict[str, float] = {}
         self._running = False
+        self._priced = 0          # pairs with live prices on both sides in the current scan
+
+    @property
+    def paused(self) -> bool:
+        return self.config is not None and bool(getattr(self.config.mode, "paused", False))
 
     # ----------------------------------------------------------- selection
     def _platform_enabled(self, platform: str) -> bool:
@@ -79,13 +84,15 @@ class CrossPlatformScanner:
         self.emit("agent_state", {"state": "scanning", "detail": f"scanning {total} pairs",
                                   "progress": {"done": 0, "total": total}})
         found: list[CrossPlatformOpportunity] = []
+        self._priced = 0
         results = await asyncio.gather(*(self._scan_pair(p) for p in pairs))
         for opp in results:
             if opp is not None:
                 found.append(opp)
         self._publish()
         self.state.cross_platform["last_scan"] = {
-            "pairs": total, "opportunities": len(found), "at": time.time()}
+            "pairs": total, "priced": self._priced, "opportunities": len(found),
+            "at": time.time()}
         if self.queue is None or self.queue.pending_count() == 0:
             actionable = [o for o in found if o.actionable]
             if actionable:
@@ -111,6 +118,7 @@ class CrossPlatformScanner:
             pair.live_edge = False
             return None
 
+        self._priced += 1
         opp = self.engine.check_pair(pair, book_a, book_b)
         pair.live_edge = opp is not None
         if opp is None:
@@ -204,7 +212,7 @@ class CrossPlatformScanner:
         self._running = True
         while self._running:
             try:
-                if self.store.all():
+                if self.store.all() and not self.paused:
                     await self.scan_once()
             except asyncio.CancelledError:
                 raise

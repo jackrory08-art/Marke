@@ -41,6 +41,9 @@ export function mount(root) {
       const [cfg, usage] = await Promise.all([get('/api/settings'), get('/api/ai/usage')]);
       const s = cfg.settings, sc = cfg.schema, ro = cfg.readonly;
       clear(body).append(
+        h('section', { class: 'block' }, h('h2', null, 'Processing'),
+          toggle('s-paused', 'mode.paused', 'Pause processing', s['mode.paused'],
+            'Stops live market polling, scanning, matching and AI checks to save CPU and credits. The dashboard stays online, and it stays paused after a restart or redeploy.')),
         h('section', { class: 'block' }, h('h2', null, 'AI verification'),
           h('div', { class: 'cols' },
             h('div', { class: 'stack' },

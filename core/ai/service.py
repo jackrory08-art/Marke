@@ -1,5 +1,6 @@
 """Wires provider, runner, verifier and queue together."""
 
+import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -39,12 +40,20 @@ class AIServices:
                 store.set_verification(pair.pair_id, "pending", {})
         self.queue.enqueue_pending()
 
+    def configured(self) -> bool:
+        """False when the provider needs an API key that is not set (nothing could be verified)."""
+        if self.provider.name != "gemini":
+            return True
+        from core.ai.gemini import API_KEY_ENV
+        return bool(os.environ.get(API_KEY_ENV)) or getattr(self.provider, "_client", None) is not None
+
     def status(self) -> dict:
         return {
             "enabled": bool(self.config.enabled),
             "provider": self.provider.name,
             "model": self.provider.model,
             "mock": self.provider.name == "mock",
+            "configured": self.configured(),
         }
 
 

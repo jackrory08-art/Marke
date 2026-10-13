@@ -20,6 +20,7 @@ class Setting:
 
 
 SETTINGS: dict[str, Setting] = {s.key: s for s in [
+    Setting("mode.paused", "bool", label="Pause processing"),
     Setting("ai.enabled", "bool", label="AI verification"),
     Setting("ai.min_confidence", "float", 0.0, 1.0, "Min confidence (identical)"),
     Setting("ai.min_confidence_caveats", "float", 0.0, 1.0, "Min confidence (with caveats)"),

@@ -42,6 +42,7 @@ on('ai_budget', (d) => { store.ai = { ...store.ai, budget: d }; notify(); });
 on('config_changed', (d) => {
   pushEvent(`Setting ${d.key} changed by ${d.by}`, 'config');
   if (d.key === 'ai.enabled') store.ai = { ...store.ai, enabled: d.value };
+  if (d.key === 'mode.paused' && store.state) store.state = { ...store.state, paused: d.value };
   notify();
 });
 on('verification_finished', (d) => {

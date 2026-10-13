@@ -91,6 +91,7 @@ class ModeConfig:
     fill_probability: float = 0.8
     scan_interval_s: float = 10.0          # cross-platform scan cadence
     scan_max_pairs_per_cycle: int = 25     # caps order-book fetches per scan
+    paused: bool = False                   # stop scanning/matching/AI/polling (set from the dashboard)
 
 
 @dataclass

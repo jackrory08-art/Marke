@@ -79,3 +79,27 @@ def test_tokens_define_both_themes():
     assert "prefers-color-scheme: dark" in css and ':root[data-theme="dark"]' in css
     for token in ("--bg", "--ink", "--accent", "--rule", "--muted"):
         assert css.count(f"{token}:") >= 3        # light, dark media block, dark attribute block
+
+
+def test_login_page_shares_the_dashboard_theme_and_has_the_logo(client):
+    html = (STATIC / "login.html").read_text()
+    for css in ("tokens.css", "base.css", "login.css"):
+        assert f"/static/css/{css}" in html
+    assert 'aria-labelledby="logo-title"' in html and ">Aerithius</title>" in html
+    assert 'class="wordmark"' in html
+    # served to anonymous visitors, along with its own theme script
+    assert client.get("/login").status_code == 200
+    for path in ("/static/login.js", "/static/login.theme.js", "/static/css/base.css"):
+        assert client.get(path).status_code == 200, path
+
+
+def test_login_css_uses_theme_tokens_not_hard_coded_colours():
+    css = (STATIC / "css" / "login.css").read_text()
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", css)
+    assert "var(--accent)" in css and "var(--surface)" in css
+
+
+def test_pause_control_is_in_the_header_and_settings():
+    main = (STATIC / "js" / "main.js").read_text()
+    assert "mode.paused" in main and "Pause processing" in main and "PAUSED" in main
+    assert "mode.paused" in (STATIC / "js" / "views" / "settings.js").read_text()
