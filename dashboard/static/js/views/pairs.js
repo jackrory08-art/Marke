@@ -47,7 +47,9 @@ export function mount(root) {
       { key: 'status', label: 'Verdict',
         render: (p) => h('span', null, verdictBadge(p.status),
           p.verdict && p.verdict.verdict ? h('span', { class: 'sub' },
-            `${VERDICT_TEXT[p.verdict.verdict] || p.verdict.verdict} · ${pct(p.verdict.confidence)}`) : null) },
+            `${VERDICT_TEXT[p.verdict.verdict] || p.verdict.verdict} · ${pct(p.verdict.confidence)}`) : null,
+          p.status === 'unverified' && p.verdict && p.verdict.reason
+            ? h('span', { class: 'sub' }, REASON_TEXT[p.verdict.reason] || p.verdict.reason) : null) },
       { key: 'diffs', label: 'Differences', sortable: false,
         render: (p) => {
           const d = (p.verdict && p.verdict.differences) || [];
