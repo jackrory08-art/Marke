@@ -382,32 +382,20 @@ class KalshiClient:
             KalshiOrderBook object or None if not found
         """
         data = await self._get(f"/markets/{ticker}/orderbook")
-        if not data or "orderbook" not in data:
+        if not data or ("orderbook" not in data and "orderbook_fp" not in data):
             return None
         
-        ob = data["orderbook"]
-        
-        # Parse YES bids (prices in cents)
-        yes_bids = []
-        for level in ob.get("yes", []):
-            if len(level) >= 2:
-                price_cents = level[0]
-                quantity = level[1]
-                yes_bids.append(PriceLevel(
-                    price=price_cents / 100.0,  # Convert to dollars
-                    size=float(quantity)
-                ))
-        
-        # Parse NO bids (prices in cents)
-        no_bids = []
-        for level in ob.get("no", []):
-            if len(level) >= 2:
-                price_cents = level[0]
-                quantity = level[1]
-                no_bids.append(PriceLevel(
-                    price=price_cents / 100.0,
-                    size=float(quantity)
-                ))
+        # Kalshi has two shapes: the fixed-point "orderbook_fp" (prices in dollars,
+        # as strings) and the older "orderbook" (prices in whole cents). Either side
+        # can be null for a market nobody has quoted yet.
+        fp = data.get("orderbook_fp") or {}
+        legacy = data.get("orderbook") or {}
+        yes_bids = (self._parse_levels(fp.get("yes_dollars") or fp.get("yes"), dollars=True)
+                    or self._parse_levels(legacy.get("yes_dollars"), dollars=True)
+                    or self._parse_levels(legacy.get("yes"), dollars=False))
+        no_bids = (self._parse_levels(fp.get("no_dollars") or fp.get("no"), dollars=True)
+                   or self._parse_levels(legacy.get("no_dollars"), dollars=True)
+                   or self._parse_levels(legacy.get("no"), dollars=False))
         
         # Sort bids descending (best/highest first)
         yes_bids.sort(key=lambda x: x.price, reverse=True)
@@ -419,6 +407,30 @@ class KalshiClient:
             no_bids=no_bids,
             timestamp=datetime.utcnow(),
         )
+    
+    @staticmethod
+    def _parse_levels(raw, dollars: bool) -> list[PriceLevel]:
+        """Parse ``[[price, quantity], ...]`` (or dicts) into price levels in dollars.
+        
+        ``dollars`` says whether prices are already dollars; otherwise they are whole
+        cents, unless the value is a decimal string like "0.4200", which is dollars.
+        """
+        levels = []
+        for level in raw or []:
+            try:
+                if isinstance(level, dict):
+                    price = level.get("price")
+                    qty = level.get("quantity", level.get("count", level.get("size")))
+                else:
+                    price, qty = level[0], level[1]
+                value, size = float(price), float(qty)
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if not dollars and not (isinstance(price, str) and "." in price):
+                value /= 100.0
+            if 0.0 < value < 1.0 and size > 0:
+                levels.append(PriceLevel(price=value, size=size))
+        return levels
     
     async def get_orderbook_unified(self, ticker: str) -> Optional[OrderBook]:
         """

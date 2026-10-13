@@ -36,6 +36,7 @@ export function mount(root) {
     renderDetail: (p) => h('div', null,
       p.verdict && p.verdict.short_reason ? h('p', null, p.verdict.short_reason) : null,
       p.verdict && p.verdict.reason ? h('p', { class: 'small muted' }, REASON_TEXT[p.verdict.reason] || p.verdict.reason) : null,
+      h('p', { class: 'small muted' }, p.scan_note ? `Prices: ${p.scan_note}` : 'Prices: live on both platforms'),
       differencesList(p.verdict && p.verdict.differences),
       h('h3', null, 'Resolution rules'), refsBlock(p.refs)),
     columns: [

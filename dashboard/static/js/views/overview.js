@@ -73,7 +73,8 @@ export function mount(root) {
   function scanText(scan) {
     if (!scan) return 'No scan yet';
     const ago = Math.max(0, Math.round(Date.now() / 1000 - scan.at));
-    return `${num(scan.pairs)} pairs, ${num(scan.priced ?? 0)} with live prices, ${num(scan.opportunities)} with an edge (${ago}s ago)`;
+    const why = (scan.why_unpriced || []).length ? ` Missing: ${scan.why_unpriced.join('; ')}.` : '';
+    return `${num(scan.pairs)} pairs, ${num(scan.priced ?? 0)} with live prices, ${num(scan.opportunities)} with an edge (${ago}s ago).${why}`;
   }
 
   function matchingText(cp) {
